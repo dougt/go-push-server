@@ -26,10 +26,10 @@ type Channel struct {
 }
 
 var uaid_to_channel map[string][]Channel;
+
 var channel_to_client map[string] *Client;
 
 func handleRegister(client *Client, f map[string]interface{}) {
-
 	log.Println(" -> handleRegister");
 
 	if (f["channelID"] == nil) {
@@ -47,13 +47,13 @@ func handleRegister(client *Client, f map[string]interface{}) {
 		Name string          `json:"messageType"`
 		Status int           `json:"status"`
 		PushEndpoint string  `json:"pushEndpoint"`
-		ChannelID string      `json:"channelID"`
+		ChannelID string     `json:"channelID"`
 	}
 
 	register := RegisterResponse{"register", 200, pushEndpoint, channelID}
 
 	j, err := json.Marshal(register);
-	if err != nil || string(j) == "null" {
+	if err != nil {
 		log.Println("Could not convert hello response to json %s",err)
 		return;
         }
@@ -90,16 +90,15 @@ func handleHello(client *Client, f map[string]interface{}) {
 	hello := HelloResponse{"hello", status, client.UAID, uaid_to_channel[client.UAID]}
 
 	j, err := json.Marshal(hello);
-	if err != nil || string(j) == "null" {
+	if err != nil {
 		log.Println("Could not convert hello response to json %s",err)
 		return;
         }
 
 	// update the channel_to_client table
-//	for channel := range uaid_to_channel[client.UAID] {
-//		channel_to_client[channel.ChannelID] = client;
-//	}
-	 
+	for i := range uaid_to_channel[client.UAID] {
+		channel_to_client[uaid_to_channel[client.UAID][i].ChannelID] = client;
+	}
 
 	log.Println("going to send:  \n  ", string(j));
 	if err = websocket.Message.Send(client.Websocket, string(j)); err != nil {
@@ -189,18 +188,27 @@ func notifyHandler(w http.ResponseWriter, r *http.Request) {
 	for i := range uaid_to_channel[uaid] {
 		if (uaid_to_channel[uaid][i].ChannelID == channelID) {
 			uaid_to_channel[uaid][i].Version = version;
+
+			sendNotificationToClient(client, uaid_to_channel[uaid][i])
+			break;
 		}
-	}
+	}	
+}
+
+func sendNotificationToClient(client *Client, channel Channel)  {
 
 	type NotificationResponse struct {
 		Name string          `json:"messageType"`
 		Channels []Channel   `json:"updates"`
 	}
 
-	notification := NotificationResponse{"notification",  uaid_to_channel[client.UAID]}
+	var channels []Channel;
+	channels = append(channels, channel);
+
+	notification := NotificationResponse{"notification",  channels}
 
 	j, err := json.Marshal(notification);
-	if err != nil || string(j) == "null" {
+	if err != nil {
 		log.Println("Could not convert hello response to json %s",err)
 		return;
         }
@@ -209,7 +217,7 @@ func notifyHandler(w http.ResponseWriter, r *http.Request) {
 	if err = websocket.Message.Send(client.Websocket, string(j)); err != nil {
 		log.Println("Could not send message to ", client.Websocket, err.Error())
 	}
-	
+
 }
 
 func main() {
