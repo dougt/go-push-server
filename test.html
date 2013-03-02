@@ -1,0 +1,71 @@
+<html>
+<head>
+<title>push notification test</title>
+
+<style>
+p { font-size: 12px;
+    color: rgb(0, 220, 98);
+    background-color: black;
+}
+body { background-color: black; }
+
+</style>
+<meta content="text/html;charset=utf-8" http-equiv="Content-Type">
+<meta content="utf-8" http-equiv="encoding">
+
+<script>
+
+navigator.mozSetMessageHandler('push', function(e) {
+    alert("Got system message! ", e);
+});
+
+var version = 0;
+
+function log(x) {
+  var d = document.getElementById("d");
+  d.innerHTML += "<p>" + x + "</p>";
+}
+
+window.addEventListener('load', start, false);
+
+function start() {
+
+  var push = navigator.pushNotification;
+
+  var req = push.register();
+  req.onsuccess = function(e) {
+    var pushEndpoint = e.target.result.pushEndpoint;
+
+    log("pushEndpoint: " + pushEndpoint);
+
+    var button = document.getElementById("button");
+    button.addEventListener("click", function() {
+
+        var request = new XMLHttpRequest();
+        request.onload = function() {
+          log("update successful to " + pushEndpoint);
+        };
+        request.onerror = function(e) {
+          log("error when trying to create an update " + e.error);
+        };
+        request.open("PUT", pushEndpoint, true);
+        request.setRequestHeader('Content-type','application/x-www-form-urlencoded');
+        request.send("version=" + version);
+        version++;
+      }, false);
+  }
+
+  req.onerror = function(e) {
+   log("Error: " + JSON.stringify(e));
+  }
+}
+
+</script>
+</head>
+<body>
+<div id="d">
+push notification test
+</div>
+<button type="button" id="button">Generate update</button>
+</body>
+</html>
