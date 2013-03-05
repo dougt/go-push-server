@@ -95,6 +95,15 @@ func handleHello(client *Client, f map[string]interface{}) {
 		client.UAID = uaid;
 	} else {
 		client.UAID = f["uaid"].(string)
+
+        if (f["channelIDs"] != nil) {
+            for _, channelID := range f["channelIDs"].([]string) {
+                log.Println("Got CHID ", channelID);
+                c := &Channel{client.UAID, channelID, ""};
+                gUAIDToChannel[client.UAID] = append(gUAIDToChannel[client.UAID], c);
+                gChannelIDToChannel[channelID] = c;
+            }
+        }
 	}
 
 	if (f["interface"] != nil) {
