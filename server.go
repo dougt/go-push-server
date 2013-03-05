@@ -130,7 +130,7 @@ func handleAck(client *Client, f map[string]interface{}) {
 
 func pushHandler(ws *websocket.Conn) {
 
-	log.Println("a");
+    log.Println("pushHandler: new websocket connection");
 
 	client := &Client{ws, "", "", 0}
 
@@ -301,11 +301,11 @@ func main() {
 
 	gConnectedClients = make(map[string]*Client)
 
-	http.Handle("/", http.FileServer(http.Dir(".")))
+	//http.Handle("/", http.FileServer(http.Dir(".")))
 
 	http.HandleFunc("/admin", admin)
 
-	http.Handle("/push", websocket.Handler(pushHandler))
+	http.Handle("/", websocket.Handler(pushHandler))
 
 	http.HandleFunc(APPSERVER_API_PREFIX, notifyHandler);
 
