@@ -1,0 +1,94 @@
+<html>
+
+<style type="text/css">
+#sidebar {
+  border: 1px solid;
+  background: #C4C4C4;
+}
+#sidebar dl {
+  margin: 0;
+  padding: 0;
+  border-bottom: 1px;
+}
+#sidebar dt {
+  font-size: 22;
+  font-weight: bold;
+  margin: 10;
+}
+#sidebar dd {
+  margin: 0;
+  padding: 10px 10px 10px 40px;
+  background: #E0E0E0;
+  border-top: 1px solid;
+}
+
+</style>
+
+<script>
+
+
+function requestPush() {
+  var req = navigator.pushNotification.register();
+
+  req.onsuccess = function(e) {
+    alert(e.target.result.pushEndpoint);
+  }
+
+  req.onerror = function(e) {
+   alert("Error: " + JSON.stringify(e));
+  }
+}
+
+var version = 0;
+
+function sendNotification(e) {
+
+  var request = new XMLHttpRequest();
+
+  request.onload = function(e) {
+    alert(pushEndpoint + "Updated!");
+  };
+
+  request.onerror = function(e) {
+    alert(pushEndpoint + "Error Updating!");
+  };
+
+  var pushEndpoint = "{{.PushEndpointPrefix}}" + e.target.id;
+
+  request.open("PUT", pushEndpoint, true);
+  request.setRequestHeader('Content-type','application/x-www-form-urlencoded');
+  request.send("version=" + ++version);
+  version++;
+}
+</script>
+
+<body>
+
+<Title>Admin</Title>
+
+<h1>Users</h1>
+
+<div id="sidebar">
+{{with .Users}}
+  {{range .}}
+    <dl>
+      <dt>
+      {{.UAID}} (Connected: {{.Connected}})
+      </dt>
+      {{with .Channels}}
+        {{range .}}
+            <dd>
+              <button type="button" id="{{.ChannelID}}" onClick="sendNotification(event)">Update</button>
+              {{.ChannelID}}  (Version: {{.Version}})
+            </dd>
+          {{end}}
+        {{end}}
+        </dl>
+  {{end}}
+{{end}}
+</div>
+
+<h1>UA</h1>
+<button type="button" id="button" onClick="requestPush();">Request push</button>
+</body>
+</html>
