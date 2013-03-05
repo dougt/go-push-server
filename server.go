@@ -6,6 +6,7 @@ import (
         "log"
 	"encoding/json"
 	"strings"
+	"text/template"
 	"./uuid"
 )
 
@@ -21,13 +22,21 @@ type Client struct {
 }
 
 type Channel struct {
+	uaid string
+
 	ChannelID string `json:"channelID"`
 	Version string   `json:"version"`
 }
 
-var uaid_to_channel map[string][]Channel;
 
-var channel_to_client map[string] *Client;
+// Mapping from a UAID to the Client object
+var gConnectedClients map[string]*Client;
+
+// Mapping from a UAID to all channels owned by that UAID
+var gUAIDToChannel map[string][]*Channel;
+
+// Mapping from a ChannelID to the cooresponding Channel
+var gChannelIDToChannel map[string] *Channel;
 
 func handleRegister(client *Client, f map[string]interface{}) {
 	log.Println(" -> handleRegister");
@@ -38,10 +47,14 @@ func handleRegister(client *Client, f map[string]interface{}) {
 	}
 
 	var channelID = f["channelID"].(string);
+
+	// TODO https!
 	var pushEndpoint = "http://" + HOST_NAME + ":" + PORT_NUMBER + APPSERVER_API_PREFIX + channelID;
 
-	uaid_to_channel[client.UAID] = append(uaid_to_channel[client.UAID], Channel{channelID, ""});
-	channel_to_client[channelID] = client;
+	channel := &Channel{client.UAID, channelID, ""};
+
+	gUAIDToChannel[client.UAID] = append(gUAIDToChannel[client.UAID], channel);
+	gChannelIDToChannel[channelID] = channel;
 
 	type RegisterResponse struct {
 		Name string          `json:"messageType"`
@@ -84,21 +97,16 @@ func handleHello(client *Client, f map[string]interface{}) {
 		Name string          `json:"messageType"`
 		Status int           `json:"status"`
 		UAID string          `json:"uaid"`
-		Channels []Channel   `json:"channelIDs"`
+		Channels []*Channel  `json:"channelIDs"`
 	}
 
-	hello := HelloResponse{"hello", status, client.UAID, uaid_to_channel[client.UAID]}
+	hello := HelloResponse{"hello", status, client.UAID, gUAIDToChannel[client.UAID]}
 
 	j, err := json.Marshal(hello);
 	if err != nil {
 		log.Println("Could not convert hello response to json %s",err)
 		return;
         }
-
-	// update the channel_to_client table
-	for i := range uaid_to_channel[client.UAID] {
-		channel_to_client[uaid_to_channel[client.UAID][i].ChannelID] = client;
-	}
 
 	log.Println("going to send:  \n  ", string(j));
 	if err = websocket.Message.Send(client.Websocket, string(j)); err != nil {
@@ -112,7 +120,9 @@ func handleAck(client *Client, f map[string]interface{}) {
 
 func pushHandler(ws *websocket.Conn) {
 
-	client := Client{ws, ""}
+	log.Println("a");
+
+	client := &Client{ws, ""}
 
 	for {
 		var f map[string]interface{}
@@ -120,26 +130,32 @@ func pushHandler(ws *websocket.Conn) {
 		var err error
 		if err = websocket.JSON.Receive(ws, &f); err != nil {
 			log.Println("Websocket Disconnected.", err.Error())
-			ws.Close();
-			return;
+			break;
 		}
+
+		log.Println("hi!");
 
 		switch f["messageType"] {
 		case "hello":
-			handleHello(&client, f);
+			handleHello(client, f);
+			gConnectedClients[client.UAID] = client;
 			break;
+
 		case "register":
-			handleRegister(&client, f);
+			handleRegister(client, f);
 			break;
 
 		case "ack":
-			handleAck(&client, f);
+			handleAck(client, f);
 			break;
 		default:
 			log.Println(" -> Unknown", f);
 			break;
 		}
 	}
+	log.Println("Closing Websocket!");
+	ws.Close();
+	gConnectedClients[client.UAID] = nil;
 }
 
 func notifyHandler(w http.ResponseWriter, r *http.Request) {
@@ -173,29 +189,14 @@ func notifyHandler(w http.ResponseWriter, r *http.Request) {
 		return;
 	}
 
-	version := values[0];
-	client := channel_to_client[channelID];
-	if (client == nil) {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("Bad Channel ID."))
-		return;
-	}
-	
-	uaid := client.UAID;
-	log.Println("uaid: ", uaid, "channelID: ", channelID, " version: ", version);
+	channel := gChannelIDToChannel[channelID];
+	channel.Version = values[0];
 
-	// update the channel with the new version.
-	for i := range uaid_to_channel[uaid] {
-		if (uaid_to_channel[uaid][i].ChannelID == channelID) {
-			uaid_to_channel[uaid][i].Version = version;
+	sendNotificationToClient(channel)
 
-			sendNotificationToClient(client, uaid_to_channel[uaid][i])
-			break;
-		}
-	}	
 }
 
-func sendNotificationToClient(client *Client, channel Channel)  {
+func sendNotificationToClient(channel *Channel)  {
 
 	type NotificationResponse struct {
 		Name string          `json:"messageType"`
@@ -203,7 +204,7 @@ func sendNotificationToClient(client *Client, channel Channel)  {
 	}
 
 	var channels []Channel;
-	channels = append(channels, channel);
+	channels = append(channels, *channel);
 
 	notification := NotificationResponse{"notification",  channels}
 
@@ -213,24 +214,63 @@ func sendNotificationToClient(client *Client, channel Channel)  {
 		return;
         }
 
+	client := gConnectedClients[channel.uaid];
+	if (client == nil || client.Websocket == nil) {
+		log.Println("Client not connected.")
+		return;
+	}
+
 	log.Println("going to send:  \n  ", string(j));
 	if err = websocket.Message.Send(client.Websocket, string(j)); err != nil {
-		log.Println("Could not send message to ", client.Websocket, err.Error())
+		log.Println("Could not send message to ", channel, err.Error())
 	}
 
 }
 
+
+func admin(w http.ResponseWriter, r *http.Request) {
+
+	type User struct {
+		UAID string
+		Connected bool
+		Channels []*Channel
+	}
+
+	type Arguments struct {
+		PushEndpointPrefix   string
+		Users []User
+	}
+
+// TODO https!
+	arguments := Arguments{"http://" + HOST_NAME + ":" + PORT_NUMBER + APPSERVER_API_PREFIX, nil}
+
+	for k := range gUAIDToChannel {
+		connected := gConnectedClients[k] != nil;
+		u := User{k, connected, gUAIDToChannel[k]};
+		arguments.Users = append(arguments.Users, u);
+	}
+
+	t := template.New("users.template")
+	s1, _ := t.ParseFiles("templates/users.template");
+	s1.Execute(w, arguments)
+}
+
 func main() {
 
-	uaid_to_channel = make(map[string][]Channel)
-	channel_to_client = make(map[string] *Client);
+	gUAIDToChannel = make(map[string][]*Channel)
+	gChannelIDToChannel = make(map[string]*Channel)
+
+	gConnectedClients = make(map[string]*Client)
 
 	http.Handle("/", http.FileServer(http.Dir(".")))
 
+	http.HandleFunc("/admin", admin)
+
 	http.Handle("/push", websocket.Handler(pushHandler))
+
 	http.HandleFunc(APPSERVER_API_PREFIX, notifyHandler);
 
-	log.Println("Listening on ", HOST_NAME + ":" + PORT_NUMBER );
+	log.Println("Listening on", HOST_NAME + ":" + PORT_NUMBER );
 	log.Fatal(http.ListenAndServe(HOST_NAME  + ":" + PORT_NUMBER , nil))
 }
 
