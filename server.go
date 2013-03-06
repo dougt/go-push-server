@@ -2,9 +2,11 @@ package main
 
 import (
         "code.google.com/p/go.net/websocket"
+        "net"
         "net/http"
         "log"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"text/template"
 	"./uuid"
@@ -19,6 +21,8 @@ const (
 type Client struct {
 	Websocket *websocket.Conn
 	UAID string
+	Ip   string
+	Port float64
 }
 
 type Channel struct {
@@ -93,6 +97,12 @@ func handleHello(client *Client, f map[string]interface{}) {
 		client.UAID = f["uaid"].(string)
 	}
 
+	if (f["interface"] != nil) {
+		m := f["interface"].(map[string]interface{})
+		client.Ip = m["ip"].(string);
+		client.Port = m["port"].(float64);
+	}
+
 	type HelloResponse struct {
 		Name string          `json:"messageType"`
 		Status int           `json:"status"`
@@ -122,7 +132,7 @@ func pushHandler(ws *websocket.Conn) {
 
 	log.Println("a");
 
-	client := &Client{ws, ""}
+	client := &Client{ws, "", "", 0}
 
 	for {
 		var f map[string]interface{}
@@ -155,7 +165,7 @@ func pushHandler(ws *websocket.Conn) {
 	}
 	log.Println("Closing Websocket!");
 	ws.Close();
-	gConnectedClients[client.UAID] = nil;
+	gConnectedClients[client.UAID].Websocket = nil;
 }
 
 func notifyHandler(w http.ResponseWriter, r *http.Request) {
@@ -192,11 +202,46 @@ func notifyHandler(w http.ResponseWriter, r *http.Request) {
 	channel := gChannelIDToChannel[channelID];
 	channel.Version = values[0];
 
-	sendNotificationToClient(channel)
+
+	client := gConnectedClients[channel.uaid];
+	if (client == nil) {
+		log.Println("no known client for the channel.");
+	} else if (client.Websocket == nil) {
+		wakeupClient(client)
+	} else {
+		sendNotificationToClient(client, channel)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
+}
+
+func wakeupClient(client *Client) {
+
+	log.Println("wakeupClient: ", client);
+	service := fmt.Sprintf("%s:%g", client.Ip, client.Port)
+
+	udpAddr, err := net.ResolveUDPAddr("up4", service)
+	if err != nil {
+		log.Println("ResolveUDPAddr error ", err.Error())
+		return
+	}
+
+	conn, err := net.DialUDP("udp", nil, udpAddr)
+	if err != nil {
+		log.Println("DialUDP error ", err.Error())
+		return
+	}
+
+	_, err = conn.Write([]byte("anything"))
+	if err != nil {
+		log.Println("UDP Write error ", err.Error())
+		return
+	}
 
 }
 
-func sendNotificationToClient(channel *Channel)  {
+func sendNotificationToClient(client *Client, channel *Channel)  {
 
 	type NotificationResponse struct {
 		Name string          `json:"messageType"`
@@ -213,12 +258,6 @@ func sendNotificationToClient(channel *Channel)  {
 		log.Println("Could not convert hello response to json %s",err)
 		return;
         }
-
-	client := gConnectedClients[channel.uaid];
-	if (client == nil || client.Websocket == nil) {
-		log.Println("Client not connected.")
-		return;
-	}
 
 	log.Println("going to send:  \n  ", string(j));
 	if err = websocket.Message.Send(client.Websocket, string(j)); err != nil {
