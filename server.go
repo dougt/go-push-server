@@ -59,6 +59,7 @@ func handleRegister(client *Client, f map[string]interface{}) {
 
 	gUAIDToChannel[client.UAID] = append(gUAIDToChannel[client.UAID], channel);
 	gChannelIDToChannel[channelID] = channel;
+	log.Println("gChannelIDToChannel ", channelID, gChannelIDToChannel[channelID]);
 
 	type RegisterResponse struct {
 		Name string          `json:"messageType"`
@@ -97,7 +98,8 @@ func handleHello(client *Client, f map[string]interface{}) {
 		client.UAID = f["uaid"].(string)
 
         if (f["channelIDs"] != nil) {
-            for _, channelID := range f["channelIDs"].([]string) {
+            for _, foo := range f["channelIDs"].([]interface {}) {
+                channelID := foo.(string)
                 log.Println("Got CHID ", channelID);
                 c := &Channel{client.UAID, channelID, ""};
                 gUAIDToChannel[client.UAID] = append(gUAIDToChannel[client.UAID], c);
@@ -178,39 +180,41 @@ func pushHandler(ws *websocket.Conn) {
 }
 
 func notifyHandler(w http.ResponseWriter, r *http.Request) {
+    log.Println("Got notification from app server ", r.URL);
 
 	if r.Method != "PUT" {
+	    log.Println("NOT A PUT")
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("Method must be PUT."))
 		return
 	}
 
-	channelID := strings.Trim(r.URL.Path, APPSERVER_API_PREFIX)
+	channelID := strings.Replace(r.URL.Path, APPSERVER_API_PREFIX, "", 1)
+	log.Println("channelID ", channelID);
 
-	if (strings.Contains(channelID, "/") || len(channelID) != (32+4)) {
+	if (strings.Contains(channelID, "/")) {
+	    log.Println("Could not find a valid channelID");
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("Could not find a valid channelID."))
 		return;
 	}
-	
 
-	if err := r.ParseForm(); err != nil {
+
+	value := r.FormValue("version")
+
+	if value == "" {
+	    log.Println("Could not find version");
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("Could not find a valid version."))
+		w.Write([]byte("Could not find version."))
 		return;
 	}
 
-	values := r.Form["version"]
-
-	if (len(values) != 1) {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("Could not find one version."))
-		return;
-	}
-
-	channel := gChannelIDToChannel[channelID];
-	channel.Version = values[0];
-
+	channel, found := gChannelIDToChannel[channelID];
+    if !found {
+        log.Println("Could not find channel " + channelID);
+        return;
+    }
+	channel.Version = value;
 
 	client := gConnectedClients[channel.uaid];
 	if (client == nil) {
@@ -272,6 +276,7 @@ func sendNotificationToClient(client *Client, channel *Channel)  {
 	if err = websocket.Message.Send(client.Websocket, string(j)); err != nil {
 		log.Println("Could not send message to ", channel, err.Error())
 	}
+    log.Println("Sent notification to client");
 
 }
 
