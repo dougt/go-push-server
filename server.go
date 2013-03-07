@@ -97,6 +97,12 @@ func handleHello(client *Client, f map[string]interface{}) {
 	} else {
 		client.UAID = f["uaid"].(string)
 
+        // BUG(nikhilm): Does not deal with sending
+        // a new UAID if their is a channel that was sent
+        // by the UA which the server does not know about.
+        // Which means in the case of this memory only server
+        // it should actually always send a new UAID when it was
+        // restarted
         if (f["channelIDs"] != nil) {
             for _, foo := range f["channelIDs"].([]interface {}) {
                 channelID := foo.(string)
