@@ -130,6 +130,7 @@ func handleUnregister(client *Client, f map[string]interface{}) {
 
 func handleHello(client *Client, f map[string]interface{}) {
 	log.Println(" -> handleHello")
+	gConnectedClients[client.UAID] = client
 
 	status := 200
 
@@ -167,13 +168,12 @@ func handleHello(client *Client, f map[string]interface{}) {
 	}
 
 	type HelloResponse struct {
-		Name     string     `json:"messageType"`
-		Status   int        `json:"status"`
-		UAID     string     `json:"uaid"`
-		Channels []*Channel `json:"channelIDs"`
+		Name   string `json:"messageType"`
+		Status int    `json:"status"`
+		UAID   string `json:"uaid"`
 	}
 
-	hello := HelloResponse{"hello", status, client.UAID, gUAIDToChannel[client.UAID]}
+	hello := HelloResponse{"hello", status, client.UAID}
 
 	j, err := json.Marshal(hello)
 	if err != nil {
@@ -211,7 +211,6 @@ func pushHandler(ws *websocket.Conn) {
 		switch f["messageType"] {
 		case "hello":
 			handleHello(client, f)
-			gConnectedClients[client.UAID] = client
 			break
 
 		case "register":
