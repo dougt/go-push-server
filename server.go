@@ -71,7 +71,54 @@ func handleRegister(client *Client, f map[string]interface{}) {
 
 	j, err := json.Marshal(register)
 	if err != nil {
-		log.Println("Could not convert hello response to json %s", err)
+		log.Println("Could not convert register response to json %s", err)
+		return
+	}
+
+	if err = websocket.Message.Send(client.Websocket, string(j)); err != nil {
+		// we could not send the message to a peer
+		log.Println("Could not send message to ", client.Websocket, err.Error())
+	}
+}
+
+func handleUnregister(client *Client, f map[string]interface{}) {
+	log.Println(" -> handleUnregister")
+
+	if f["channelID"] == nil {
+		log.Println("channelID is missing!")
+		return
+	}
+
+	var channelID = f["channelID"].(string)
+
+	log.Println("len ", len(gChannelIDToChannel))
+	channel, ok := gChannelIDToChannel[channelID]
+	if ok {
+		// only delete if UA owns this channel
+		var index = -1
+		for p, v := range gUAIDToChannel[client.UAID] {
+			if v == channel {
+				delete(gChannelIDToChannel, channelID)
+				index = p
+			}
+		}
+		if index >= 0 {
+			gUAIDToChannel[client.UAID] = append(gUAIDToChannel[client.UAID][:index], gUAIDToChannel[client.UAID][index+1:]...)
+		}
+	}
+	log.Println("New len ", len(gChannelIDToChannel))
+
+	type UnregisterResponse struct {
+		Name      string `json:"messageType"`
+		Status    int    `json:"status"`
+		ChannelID string `json:"channelID"`
+	}
+
+	unregister := UnregisterResponse{"unregister", 200, channelID}
+
+	j, err := json.Marshal(unregister)
+	if err != nil {
+		log.Println("Could not convert unregister response to json %s", err)
 		return
 	}
 
@@ -169,6 +216,10 @@ func pushHandler(ws *websocket.Conn) {
 
 		case "register":
 			handleRegister(client, f)
+			break
+
+		case "unregister":
+			handleUnregister(client, f)
 			break
 
 		case "ack":
