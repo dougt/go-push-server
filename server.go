@@ -5,6 +5,7 @@ import (
 	"code.google.com/p/go.net/websocket"
 	"encoding/json"
 	"fmt"
+	"os"
 	"io/ioutil"
 	"log"
 	"net"
@@ -13,11 +14,13 @@ import (
 	"text/template"
 )
 
-const (
-	HOST_NAME            = "localhost"
-	PORT_NUMBER          = "8080"
-	APPSERVER_API_PREFIX = "/notify/"
-)
+type ServerConfig struct {
+	Hostname         string `json:"hostname"`
+	Port             string `json:"port"`
+	NotifyPrefix     string `json:"notifyPrefix"`
+}
+
+var gServerConfig ServerConfig;
 
 type Client struct {
 	Websocket *websocket.Conn `json:"-"`
@@ -45,24 +48,41 @@ type ServerState struct {
 
 var gServerState ServerState
 
-func openState() bool {
+func readConfig() {
 
 	var data []byte
 	var err error
 
+	data, err = ioutil.ReadFile("config.json")
+	if err != nil {
+		log.Println("Not configured.  Could not find config.json")
+		os.Exit(-1)
+	}
+
+	err = json.Unmarshal(data, &gServerConfig)
+	if err != nil {
+		log.Println("Could not unmarshal config.json", err)
+		os.Exit(-1)
+		return
+	}
+}
+
+func openState() {
+	var data []byte
+	var err error
+
 	data, err = ioutil.ReadFile("serverstate.json")
-	if err != nil {
-		log.Println("Could not read in serverstate")
-		return false
+	if err == nil {
+		err = json.Unmarshal(data, &gServerState)
+		if err == nil {
+			return
+		}
 	}
 
-	err = json.Unmarshal(data, &gServerState)
-	if err != nil {
-		log.Println("Could not unmarshal serverstate")
-		return false
-	}
-
-	return true
+	log.Println(" -> creating new server state")
+	gServerState.UAIDToChannels = make(map[string][]*Channel)
+	gServerState.ChannelIDToChannel = make(map[string]*Channel)
+	gServerState.ConnectedClients = make(map[string]*Client)
 }
 
 func saveState() {
@@ -88,7 +108,7 @@ func handleRegister(client *Client, f map[string]interface{}) {
 	var channelID = f["channelID"].(string)
 
 	// TODO https!
-	var pushEndpoint = "http://" + HOST_NAME + ":" + PORT_NUMBER + APPSERVER_API_PREFIX + channelID
+	var pushEndpoint = "http://" + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix + channelID
 
 	channel := &Channel{client.UAID, channelID, ""}
 
@@ -276,7 +296,7 @@ func notifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	channelID := strings.Replace(r.URL.Path, APPSERVER_API_PREFIX, "", 1)
+	channelID := strings.Replace(r.URL.Path, gServerConfig.NotifyPrefix, "", 1)
 
 	if strings.Contains(channelID, "/") {
 		log.Println("Could not find a valid channelID")
@@ -337,7 +357,7 @@ func wakeupClient(client *Client) {
 		return
 	}
 
-	_, err = conn.Write([]byte("anything"))
+	_, err = conn.Write([]byte(""))
 	if err != nil {
 		log.Println("UDP Write error ", err.Error())
 		return
@@ -382,7 +402,7 @@ func admin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// TODO https!
-	arguments := Arguments{"http://" + HOST_NAME + ":" + PORT_NUMBER + APPSERVER_API_PREFIX, nil}
+	arguments := Arguments{"http://" + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix, nil}
 
 	for k := range gServerState.UAIDToChannels {
 		connected := gServerState.ConnectedClients[k] != nil
@@ -397,22 +417,16 @@ func admin(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 
-	s := openState()
+	readConfig()
 
-	if s == false {
-		log.Println("Could not restore state")
-
-		gServerState.UAIDToChannels = make(map[string][]*Channel)
-		gServerState.ChannelIDToChannel = make(map[string]*Channel)
-		gServerState.ConnectedClients = make(map[string]*Client)
-	}
+	openState()
 
 	http.HandleFunc("/admin", admin)
 
 	http.Handle("/", websocket.Handler(pushHandler))
 
-	http.HandleFunc(APPSERVER_API_PREFIX, notifyHandler)
+	http.HandleFunc(gServerConfig.NotifyPrefix, notifyHandler)
 
-	log.Println("Listening on", HOST_NAME+":"+PORT_NUMBER)
-	log.Fatal(http.ListenAndServe(HOST_NAME+":"+PORT_NUMBER, nil))
+	log.Println("Listening on", gServerConfig.Hostname+":"+gServerConfig.Port)
+	log.Fatal(http.ListenAndServe(gServerConfig.Hostname+":"+gServerConfig.Port, nil))
 }
