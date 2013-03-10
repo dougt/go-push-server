@@ -161,8 +161,6 @@ func handleUnregister(client *Client, f map[string]interface{}) {
 
 func handleHello(client *Client, f map[string]interface{}) {
 
-	gServerState.ConnectedClients[client.UAID] = client
-
 	status := 200
 
 	if f["uaid"] == nil {
@@ -191,6 +189,8 @@ func handleHello(client *Client, f map[string]interface{}) {
 			}
 		}
 	}
+
+	gServerState.ConnectedClients[client.UAID] = client
 
 	if f["interface"] != nil {
 		m := f["interface"].(map[string]interface{})
@@ -262,6 +262,7 @@ func pushHandler(ws *websocket.Conn) {
 
 	log.Println("Closing Websocket!")
 	ws.Close()
+	
 	gServerState.ConnectedClients[client.UAID].Websocket = nil
 }
 
