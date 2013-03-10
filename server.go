@@ -79,7 +79,6 @@ func saveState() {
 }
 
 func handleRegister(client *Client, f map[string]interface{}) {
-	log.Println(" -> handleRegister")
 
 	if f["channelID"] == nil {
 		log.Println("channelID is missing!")
@@ -118,7 +117,6 @@ func handleRegister(client *Client, f map[string]interface{}) {
 }
 
 func handleUnregister(client *Client, f map[string]interface{}) {
-	log.Println(" -> handleUnregister")
 
 	if f["channelID"] == nil {
 		log.Println("channelID is missing!")
@@ -126,8 +124,6 @@ func handleUnregister(client *Client, f map[string]interface{}) {
 	}
 
 	var channelID = f["channelID"].(string)
-
-	log.Println("len ", len(gServerState.ChannelIDToChannel))
 	channel, ok := gServerState.ChannelIDToChannel[channelID]
 	if ok {
 		// only delete if UA owns this channel
@@ -142,7 +138,6 @@ func handleUnregister(client *Client, f map[string]interface{}) {
 			gServerState.UAIDToChannels[client.UAID] = append(gServerState.UAIDToChannels[client.UAID][:index], gServerState.UAIDToChannels[client.UAID][index+1:]...)
 		}
 	}
-	log.Println("New len ", len(gServerState.ChannelIDToChannel))
 
 	type UnregisterResponse struct {
 		Name      string `json:"messageType"`
@@ -165,7 +160,7 @@ func handleUnregister(client *Client, f map[string]interface{}) {
 }
 
 func handleHello(client *Client, f map[string]interface{}) {
-	log.Println(" -> handleHello")
+
 	gServerState.ConnectedClients[client.UAID] = client
 
 	status := 200
@@ -189,7 +184,7 @@ func handleHello(client *Client, f map[string]interface{}) {
 		if f["channelIDs"] != nil {
 			for _, foo := range f["channelIDs"].([]interface{}) {
 				channelID := foo.(string)
-				log.Println("Got CHID ", channelID)
+
 				c := &Channel{client.UAID, channelID, ""}
 				gServerState.UAIDToChannels[client.UAID] = append(gServerState.UAIDToChannels[client.UAID], c)
 				gServerState.ChannelIDToChannel[channelID] = c
@@ -217,19 +212,15 @@ func handleHello(client *Client, f map[string]interface{}) {
 		return
 	}
 
-	log.Println("going to send:  \n  ", string(j))
 	if err = websocket.Message.Send(client.Websocket, string(j)); err != nil {
 		log.Println("Could not send message to ", client.Websocket, err.Error())
 	}
 }
 
 func handleAck(client *Client, f map[string]interface{}) {
-	log.Println(" -> ack")
 }
 
 func pushHandler(ws *websocket.Conn) {
-
-	log.Println("pushHandler: new websocket connection")
 
 	client := &Client{ws, "", "", 0}
 
@@ -242,7 +233,7 @@ func pushHandler(ws *websocket.Conn) {
 			break
 		}
 
-		log.Println("hi!")
+		log.Println("pushHandler msg: ", f["messageType"])
 
 		switch f["messageType"] {
 		case "hello":
@@ -268,6 +259,7 @@ func pushHandler(ws *websocket.Conn) {
 
 		saveState()
 	}
+
 	log.Println("Closing Websocket!")
 	ws.Close()
 	gServerState.ConnectedClients[client.UAID].Websocket = nil
@@ -284,7 +276,6 @@ func notifyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	channelID := strings.Replace(r.URL.Path, APPSERVER_API_PREFIX, "", 1)
-	log.Println("channelID ", channelID)
 
 	if strings.Contains(channelID, "/") {
 		log.Println("Could not find a valid channelID")
@@ -371,12 +362,9 @@ func sendNotificationToClient(client *Client, channel *Channel) {
 		return
 	}
 
-	log.Println("going to send:  \n  ", string(j))
 	if err = websocket.Message.Send(client.Websocket, string(j)); err != nil {
 		log.Println("Could not send message to ", channel, err.Error())
 	}
-	log.Println("Sent notification to client")
-
 }
 
 func admin(w http.ResponseWriter, r *http.Request) {
