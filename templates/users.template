@@ -39,9 +39,24 @@ function requestPush() {
   }
 }
 
+function unregister(id) {
+  var pushEndpoint = "{{.PushEndpointPrefix}}" + id;
+
+  var req = navigator.pushNotification.unregister(pushEndpoint);
+
+  req.onsuccess = function(e) {
+    alert("unregistered successful = " + id);
+  }
+
+  req.onerror = function(e) {
+    alert("unregistered failed = " + id);
+  }
+}
+
+
 var version = 0;
 
-function sendNotification(e) {
+function sendNotification(id) {
 
   var request = new XMLHttpRequest();
 
@@ -53,7 +68,7 @@ function sendNotification(e) {
     alert(pushEndpoint + "Error Updating!");
   };
 
-  var pushEndpoint = "{{.PushEndpointPrefix}}" + e.target.id;
+  var pushEndpoint = "{{.PushEndpointPrefix}}" + id;
 
   request.open("PUT", pushEndpoint, true);
   request.setRequestHeader('Content-type','application/x-www-form-urlencoded');
@@ -78,7 +93,8 @@ function sendNotification(e) {
       {{with .Channels}}
         {{range .}}
             <dd>
-              <button type="button" id="{{.ChannelID}}" onClick="sendNotification(event)">Update</button>
+              <button type="button" onClick="unregister('{{.ChannelID}}')">Unregister</button>
+              <button type="button" onClick="sendNotification('{{.ChannelID}}')">Update</button>
               {{.ChannelID}}  (Version: {{.Version}})
             </dd>
           {{end}}
