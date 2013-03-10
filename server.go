@@ -5,17 +5,17 @@ import (
 	"code.google.com/p/go.net/websocket"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
 	"strings"
 	"text/template"
-	"io/ioutil"
 )
 
 const (
-	HOST_NAME = "localhost"
-	PORT_NUMBER = "8080"
+	HOST_NAME            = "localhost"
+	PORT_NUMBER          = "8080"
 	APPSERVER_API_PREFIX = "/notify/"
 )
 
@@ -32,48 +32,47 @@ type Channel struct {
 	Version   string `json:"version"`
 }
 
-
 type ServerState struct {
-// Mapping from a UAID to the Client object
-	ConnectedClients    map[string]*Client     `json:"connectedClients"`
+	// Mapping from a UAID to the Client object
+	ConnectedClients map[string]*Client `json:"connectedClients"`
 
-// Mapping from a UAID to all channels owned by that UAID
-	UAIDToChannels      map[string][]*Channel  `json:"uaidToChannels"`
+	// Mapping from a UAID to all channels owned by that UAID
+	UAIDToChannels map[string][]*Channel `json:"uaidToChannels"`
 
-// Mapping from a ChannelID to the cooresponding Channel
-	ChannelIDToChannel  map[string]*Channel    `json:"channelIDToChannel"`
+	// Mapping from a ChannelID to the cooresponding Channel
+	ChannelIDToChannel map[string]*Channel `json:"channelIDToChannel"`
 }
 
-var gServerState ServerState;
+var gServerState ServerState
 
 func openState() bool {
 
 	var data []byte
-	var err error;
+	var err error
 
 	data, err = ioutil.ReadFile("serverstate.json")
-	if (err != nil) {
-		log.Println("Could not read in serverstate");
-		return false;
+	if err != nil {
+		log.Println("Could not read in serverstate")
+		return false
 	}
 
-	err = json.Unmarshal(data, &gServerState);
-	if (err != nil) {
-		log.Println("Could not unmarshal serverstate");
-		return false;
+	err = json.Unmarshal(data, &gServerState)
+	if err != nil {
+		log.Println("Could not unmarshal serverstate")
+		return false
 	}
 
-	return true;
+	return true
 }
 
 func saveState() {
 	log.Println(" -> saving state..")
 
 	var data []byte
-	var err error;
+	var err error
 
-	data, err = json.Marshal(gServerState);
-	if (err != nil) {
+	data, err = json.Marshal(gServerState)
+	if err != nil {
 		return
 	}
 	ioutil.WriteFile("serverstate.json", data, 0644)
@@ -267,7 +266,7 @@ func pushHandler(ws *websocket.Conn) {
 			break
 		}
 
-		saveState();
+		saveState()
 	}
 	log.Println("Closing Websocket!")
 	ws.Close()
@@ -311,8 +310,8 @@ func notifyHandler(w http.ResponseWriter, r *http.Request) {
 	channel.Version = value
 
 	client := gServerState.ConnectedClients[channel.UAID]
-	
-	saveState();
+
+	saveState()
 
 	if client == nil {
 		log.Println("no known client for the channel.")
@@ -411,9 +410,9 @@ func main() {
 
 	s := openState()
 
-	if (s == false) {
-		log.Println("Could not restore state");
-		
+	if s == false {
+		log.Println("Could not restore state")
+
 		gServerState.UAIDToChannels = make(map[string][]*Channel)
 		gServerState.ChannelIDToChannel = make(map[string]*Channel)
 		gServerState.ConnectedClients = make(map[string]*Client)
