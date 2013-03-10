@@ -5,22 +5,22 @@ import (
 	"code.google.com/p/go.net/websocket"
 	"encoding/json"
 	"fmt"
-	"os"
 	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"text/template"
 )
 
 type ServerConfig struct {
-	Hostname         string `json:"hostname"`
-	Port             string `json:"port"`
-	NotifyPrefix     string `json:"notifyPrefix"`
+	Hostname     string `json:"hostname"`
+	Port         string `json:"port"`
+	NotifyPrefix string `json:"notifyPrefix"`
 }
 
-var gServerConfig ServerConfig;
+var gServerConfig ServerConfig
 
 type Client struct {
 	Websocket *websocket.Conn `json:"-"`
@@ -282,7 +282,7 @@ func pushHandler(ws *websocket.Conn) {
 
 	log.Println("Closing Websocket!")
 	ws.Close()
-	
+
 	gServerState.ConnectedClients[client.UAID].Websocket = nil
 }
 
