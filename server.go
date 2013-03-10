@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"text/template"
+	"io/ioutil"
 )
 
 const (
@@ -19,27 +20,64 @@ const (
 )
 
 type Client struct {
-	Websocket *websocket.Conn
-	UAID      string
-	Ip        string
-	Port      float64
+	Websocket *websocket.Conn `json:"-"`
+	UAID      string          `json:"uaid"`
+	Ip        string          `json:"ip"`
+	Port      float64         `json:"port"`
 }
 
 type Channel struct {
-	uaid string
-
+	UAID      string `json:"uaid"`
 	ChannelID string `json:"channelID"`
 	Version   string `json:"version"`
 }
 
+
+type ServerState struct {
 // Mapping from a UAID to the Client object
-var gConnectedClients map[string]*Client
+	ConnectedClients    map[string]*Client     `json:"connectedClients"`
 
 // Mapping from a UAID to all channels owned by that UAID
-var gUAIDToChannel map[string][]*Channel
+	UAIDToChannels      map[string][]*Channel  `json:"uaidToChannels"`
 
 // Mapping from a ChannelID to the cooresponding Channel
-var gChannelIDToChannel map[string]*Channel
+	ChannelIDToChannel  map[string]*Channel    `json:"channelIDToChannel"`
+}
+
+var gServerState ServerState;
+
+func openState() bool {
+
+	var data []byte
+	var err error;
+
+	data, err = ioutil.ReadFile("serverstate.json")
+	if (err != nil) {
+		log.Println("Could not read in serverstate");
+		return false;
+	}
+
+	err = json.Unmarshal(data, &gServerState);
+	if (err != nil) {
+		log.Println("Could not unmarshal serverstate");
+		return false;
+	}
+
+	return true;
+}
+
+func saveState() {
+	log.Println(" -> saving state..")
+
+	var data []byte
+	var err error;
+
+	data, err = json.Marshal(gServerState);
+	if (err != nil) {
+		return
+	}
+	ioutil.WriteFile("serverstate.json", data, 0644)
+}
 
 func handleRegister(client *Client, f map[string]interface{}) {
 	log.Println(" -> handleRegister")
@@ -56,9 +94,8 @@ func handleRegister(client *Client, f map[string]interface{}) {
 
 	channel := &Channel{client.UAID, channelID, ""}
 
-	gUAIDToChannel[client.UAID] = append(gUAIDToChannel[client.UAID], channel)
-	gChannelIDToChannel[channelID] = channel
-	log.Println("gChannelIDToChannel ", channelID, gChannelIDToChannel[channelID])
+	gServerState.UAIDToChannels[client.UAID] = append(gServerState.UAIDToChannels[client.UAID], channel)
+	gServerState.ChannelIDToChannel[channelID] = channel
 
 	type RegisterResponse struct {
 		Name         string `json:"messageType"`
@@ -91,22 +128,22 @@ func handleUnregister(client *Client, f map[string]interface{}) {
 
 	var channelID = f["channelID"].(string)
 
-	log.Println("len ", len(gChannelIDToChannel))
-	channel, ok := gChannelIDToChannel[channelID]
+	log.Println("len ", len(gServerState.ChannelIDToChannel))
+	channel, ok := gServerState.ChannelIDToChannel[channelID]
 	if ok {
 		// only delete if UA owns this channel
 		var index = -1
-		for p, v := range gUAIDToChannel[client.UAID] {
+		for p, v := range gServerState.UAIDToChannels[client.UAID] {
 			if v == channel {
-				delete(gChannelIDToChannel, channelID)
+				delete(gServerState.ChannelIDToChannel, channelID)
 				index = p
 			}
 		}
 		if index >= 0 {
-			gUAIDToChannel[client.UAID] = append(gUAIDToChannel[client.UAID][:index], gUAIDToChannel[client.UAID][index+1:]...)
+			gServerState.UAIDToChannels[client.UAID] = append(gServerState.UAIDToChannels[client.UAID][:index], gServerState.UAIDToChannels[client.UAID][index+1:]...)
 		}
 	}
-	log.Println("New len ", len(gChannelIDToChannel))
+	log.Println("New len ", len(gServerState.ChannelIDToChannel))
 
 	type UnregisterResponse struct {
 		Name      string `json:"messageType"`
@@ -130,7 +167,7 @@ func handleUnregister(client *Client, f map[string]interface{}) {
 
 func handleHello(client *Client, f map[string]interface{}) {
 	log.Println(" -> handleHello")
-	gConnectedClients[client.UAID] = client
+	gServerState.ConnectedClients[client.UAID] = client
 
 	status := 200
 
@@ -155,8 +192,8 @@ func handleHello(client *Client, f map[string]interface{}) {
 				channelID := foo.(string)
 				log.Println("Got CHID ", channelID)
 				c := &Channel{client.UAID, channelID, ""}
-				gUAIDToChannel[client.UAID] = append(gUAIDToChannel[client.UAID], c)
-				gChannelIDToChannel[channelID] = c
+				gServerState.UAIDToChannels[client.UAID] = append(gServerState.UAIDToChannels[client.UAID], c)
+				gServerState.ChannelIDToChannel[channelID] = c
 			}
 		}
 	}
@@ -224,14 +261,17 @@ func pushHandler(ws *websocket.Conn) {
 		case "ack":
 			handleAck(client, f)
 			break
+
 		default:
 			log.Println(" -> Unknown", f)
 			break
 		}
+
+		saveState();
 	}
 	log.Println("Closing Websocket!")
 	ws.Close()
-	gConnectedClients[client.UAID].Websocket = nil
+	gServerState.ConnectedClients[client.UAID].Websocket = nil
 }
 
 func notifyHandler(w http.ResponseWriter, r *http.Request) {
@@ -263,14 +303,17 @@ func notifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	channel, found := gChannelIDToChannel[channelID]
+	channel, found := gServerState.ChannelIDToChannel[channelID]
 	if !found {
 		log.Println("Could not find channel " + channelID)
 		return
 	}
 	channel.Version = value
 
-	client := gConnectedClients[channel.uaid]
+	client := gServerState.ConnectedClients[channel.UAID]
+	
+	saveState();
+
 	if client == nil {
 		log.Println("no known client for the channel.")
 	} else if client.Websocket == nil {
@@ -284,6 +327,9 @@ func notifyHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func wakeupClient(client *Client) {
+
+	// TODO probably want to do this a few times before
+	// giving up.
 
 	log.Println("wakeupClient: ", client)
 	service := fmt.Sprintf("%s:%g", client.Ip, client.Port)
@@ -350,9 +396,9 @@ func admin(w http.ResponseWriter, r *http.Request) {
 	// TODO https!
 	arguments := Arguments{"http://" + HOST_NAME + ":" + PORT_NUMBER + APPSERVER_API_PREFIX, nil}
 
-	for k := range gUAIDToChannel {
-		connected := gConnectedClients[k] != nil
-		u := User{k, connected, gUAIDToChannel[k]}
+	for k := range gServerState.UAIDToChannels {
+		connected := gServerState.ConnectedClients[k] != nil
+		u := User{k, connected, gServerState.UAIDToChannels[k]}
 		arguments.Users = append(arguments.Users, u)
 	}
 
@@ -363,12 +409,15 @@ func admin(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 
-	gUAIDToChannel = make(map[string][]*Channel)
-	gChannelIDToChannel = make(map[string]*Channel)
+	s := openState()
 
-	gConnectedClients = make(map[string]*Client)
-
-	//http.Handle("/", http.FileServer(http.Dir(".")))
+	if (s == false) {
+		log.Println("Could not restore state");
+		
+		gServerState.UAIDToChannels = make(map[string][]*Channel)
+		gServerState.ChannelIDToChannel = make(map[string]*Channel)
+		gServerState.ConnectedClients = make(map[string]*Client)
+	}
 
 	http.HandleFunc("/admin", admin)
 
