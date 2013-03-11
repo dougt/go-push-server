@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"text/template"
 )
@@ -404,6 +405,10 @@ func sendNotificationToClient(client *Client, channel *Channel) {
 
 func admin(w http.ResponseWriter, r *http.Request) {
 
+	memstats := new(runtime.MemStats)
+	runtime.ReadMemStats(memstats)
+
+	totalMemory := memstats.Alloc
 	type User struct {
 		UAID      string
 		Connected bool
@@ -412,11 +417,12 @@ func admin(w http.ResponseWriter, r *http.Request) {
 
 	type Arguments struct {
 		PushEndpointPrefix string
+		TotalMemory        uint64
 		Users              []User
 	}
 
 	// TODO https!
-	arguments := Arguments{"http://" + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix, nil}
+	arguments := Arguments{"http://" + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix, totalMemory, nil}
 
 	for uaid, channelIDSet := range gServerState.UAIDToChannelIDs {
 		connected := gServerState.ConnectedClients[uaid] != nil

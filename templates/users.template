@@ -106,5 +106,8 @@ function sendNotification(id) {
 
 <h1>UA</h1>
 <button type="button" id="button" onClick="requestPush();">Request push</button>
+
+<h1>Memory</h1>
+<p> Memory used: {{.TotalMemory}} </p>
 </body>
 </html>
