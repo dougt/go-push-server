@@ -360,7 +360,7 @@ func wakeupClient(client *Client) {
 	log.Println("wakeupClient: ", client)
 	service := fmt.Sprintf("%s:%g", client.Ip, client.Port)
 
-	udpAddr, err := net.ResolveUDPAddr("up4", service)
+	udpAddr, err := net.ResolveUDPAddr("udp4", service)
 	if err != nil {
 		log.Println("ResolveUDPAddr error ", err.Error())
 		return
