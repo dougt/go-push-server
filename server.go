@@ -35,7 +35,7 @@ type Channel struct {
 	Version   string `json:"version"`
 }
 
-type ChannelIDSet map[string]bool
+type ChannelIDSet map[string]*Channel
 
 type ServerState struct {
 	// Mapping from a UAID to the Client object
@@ -46,7 +46,7 @@ type ServerState struct {
 	UAIDToChannelIDs map[string]ChannelIDSet `json:"uaidToChannels"`
 
 	// Mapping from a ChannelID to the cooresponding Channel
-	ChannelIDToChannel map[string]*Channel `json:"channelIDToChannel"`
+	ChannelIDToChannel ChannelIDSet `json:"channelIDToChannel"`
 }
 
 var gServerState ServerState
@@ -84,7 +84,7 @@ func openState() {
 
 	log.Println(" -> creating new server state")
 	gServerState.UAIDToChannelIDs = make(map[string]ChannelIDSet)
-	gServerState.ChannelIDToChannel = make(map[string]*Channel)
+	gServerState.ChannelIDToChannel = make(ChannelIDSet)
 	gServerState.ConnectedClients = make(map[string]*Client)
 }
 
@@ -130,7 +130,7 @@ func handleRegister(client *Client, f map[string]interface{}) {
 		if gServerState.UAIDToChannelIDs[client.UAID] == nil {
 			gServerState.UAIDToChannelIDs[client.UAID] = make(ChannelIDSet)
 		}
-		gServerState.UAIDToChannelIDs[client.UAID][channelID] = true
+		gServerState.UAIDToChannelIDs[client.UAID][channelID] = channel
 		gServerState.ChannelIDToChannel[channelID] = channel
 
 		register.Status = 200
@@ -218,7 +218,7 @@ func handleHello(client *Client, f map[string]interface{}) {
 				channelID := foo.(string)
 
 				c := &Channel{client.UAID, channelID, ""}
-				gServerState.UAIDToChannelIDs[client.UAID][channelID] = true
+				gServerState.UAIDToChannelIDs[client.UAID][channelID] = c
 				gServerState.ChannelIDToChannel[channelID] = c
 			}
 		}
@@ -422,8 +422,8 @@ func admin(w http.ResponseWriter, r *http.Request) {
 		log.Println("Foo ", uaid)
 		connected := gServerState.ConnectedClients[uaid] != nil
 		var channels []*Channel
-		for channelID, _ := range channelIDSet {
-			channels = append(channels, gServerState.ChannelIDToChannel[channelID])
+		for _, channel := range channelIDSet {
+			channels = append(channels, channel)
 		}
 		u := User{uaid, connected, channels}
 		arguments.Users = append(arguments.Users, u)
