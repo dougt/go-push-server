@@ -419,7 +419,6 @@ func admin(w http.ResponseWriter, r *http.Request) {
 	arguments := Arguments{"http://" + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix, nil}
 
 	for uaid, channelIDSet := range gServerState.UAIDToChannelIDs {
-		log.Println("Foo ", uaid)
 		connected := gServerState.ConnectedClients[uaid] != nil
 		var channels []*Channel
 		for _, channel := range channelIDSet {
