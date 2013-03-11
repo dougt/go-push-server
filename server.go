@@ -99,6 +99,12 @@ func saveState() {
 }
 
 func handleRegister(client *Client, f map[string]interface{}) {
+	type RegisterResponse struct {
+		Name         string `json:"messageType"`
+		Status       int    `json:"status"`
+		PushEndpoint string `json:"pushEndpoint"`
+		ChannelID    string `json:"channelID"`
+	}
 
 	if f["channelID"] == nil {
 		log.Println("channelID is missing!")
@@ -107,22 +113,27 @@ func handleRegister(client *Client, f map[string]interface{}) {
 
 	var channelID = f["channelID"].(string)
 
-	// TODO https!
-	var pushEndpoint = "http://" + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix + channelID
+	register := RegisterResponse{"register", 0, "", channelID}
 
-	channel := &Channel{client.UAID, channelID, ""}
+	prevEntry, exists := gServerState.ChannelIDToChannel[channelID]
+	if exists && prevEntry.UAID != client.UAID {
+		register.Status = 409
+	} else {
+		// TODO https!
+		var pushEndpoint = "http://" + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix + channelID
 
-	gServerState.UAIDToChannels[client.UAID] = append(gServerState.UAIDToChannels[client.UAID], channel)
-	gServerState.ChannelIDToChannel[channelID] = channel
+		channel := &Channel{client.UAID, channelID, ""}
 
-	type RegisterResponse struct {
-		Name         string `json:"messageType"`
-		Status       int    `json:"status"`
-		PushEndpoint string `json:"pushEndpoint"`
-		ChannelID    string `json:"channelID"`
+		gServerState.UAIDToChannels[client.UAID] = append(gServerState.UAIDToChannels[client.UAID], channel)
+		gServerState.ChannelIDToChannel[channelID] = channel
+
+		register.Status = 200
+		register.PushEndpoint = pushEndpoint
 	}
 
-	register := RegisterResponse{"register", 200, pushEndpoint, channelID}
+	if register.Status == 0 {
+		panic("Register(): status field was left unset when replying to client")
+	}
 
 	j, err := json.Marshal(register)
 	if err != nil {
