@@ -35,15 +35,18 @@ type Channel struct {
 	Version   string `json:"version"`
 }
 
+type ChannelIDSet map[string]*Channel
+
 type ServerState struct {
 	// Mapping from a UAID to the Client object
 	ConnectedClients map[string]*Client `json:"connectedClients"`
 
-	// Mapping from a UAID to all channels owned by that UAID
-	UAIDToChannels map[string][]*Channel `json:"uaidToChannels"`
+	// Mapping from a UAID to all channelIDs owned by that UAID
+	// where channelIDs are represented as a map-backed set
+	UAIDToChannelIDs map[string]ChannelIDSet `json:"uaidToChannels"`
 
 	// Mapping from a ChannelID to the cooresponding Channel
-	ChannelIDToChannel map[string]*Channel `json:"channelIDToChannel"`
+	ChannelIDToChannel ChannelIDSet `json:"channelIDToChannel"`
 }
 
 var gServerState ServerState
@@ -80,8 +83,8 @@ func openState() {
 	}
 
 	log.Println(" -> creating new server state")
-	gServerState.UAIDToChannels = make(map[string][]*Channel)
-	gServerState.ChannelIDToChannel = make(map[string]*Channel)
+	gServerState.UAIDToChannelIDs = make(map[string]ChannelIDSet)
+	gServerState.ChannelIDToChannel = make(ChannelIDSet)
 	gServerState.ConnectedClients = make(map[string]*Client)
 }
 
@@ -99,6 +102,12 @@ func saveState() {
 }
 
 func handleRegister(client *Client, f map[string]interface{}) {
+	type RegisterResponse struct {
+		Name         string `json:"messageType"`
+		Status       int    `json:"status"`
+		PushEndpoint string `json:"pushEndpoint"`
+		ChannelID    string `json:"channelID"`
+	}
 
 	if f["channelID"] == nil {
 		log.Println("channelID is missing!")
@@ -107,22 +116,30 @@ func handleRegister(client *Client, f map[string]interface{}) {
 
 	var channelID = f["channelID"].(string)
 
-	// TODO https!
-	var pushEndpoint = "http://" + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix + channelID
+	register := RegisterResponse{"register", 0, "", channelID}
 
-	channel := &Channel{client.UAID, channelID, ""}
+	prevEntry, exists := gServerState.ChannelIDToChannel[channelID]
+	if exists && prevEntry.UAID != client.UAID {
+		register.Status = 409
+	} else {
+		// TODO https!
+		var pushEndpoint = "http://" + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix + channelID
 
-	gServerState.UAIDToChannels[client.UAID] = append(gServerState.UAIDToChannels[client.UAID], channel)
-	gServerState.ChannelIDToChannel[channelID] = channel
+		channel := &Channel{client.UAID, channelID, ""}
 
-	type RegisterResponse struct {
-		Name         string `json:"messageType"`
-		Status       int    `json:"status"`
-		PushEndpoint string `json:"pushEndpoint"`
-		ChannelID    string `json:"channelID"`
+		if gServerState.UAIDToChannelIDs[client.UAID] == nil {
+			gServerState.UAIDToChannelIDs[client.UAID] = make(ChannelIDSet)
+		}
+		gServerState.UAIDToChannelIDs[client.UAID][channelID] = channel
+		gServerState.ChannelIDToChannel[channelID] = channel
+
+		register.Status = 200
+		register.PushEndpoint = pushEndpoint
 	}
 
-	register := RegisterResponse{"register", 200, pushEndpoint, channelID}
+	if register.Status == 0 {
+		panic("Register(): status field was left unset when replying to client")
+	}
 
 	j, err := json.Marshal(register)
 	if err != nil {
@@ -144,18 +161,15 @@ func handleUnregister(client *Client, f map[string]interface{}) {
 	}
 
 	var channelID = f["channelID"].(string)
-	channel, ok := gServerState.ChannelIDToChannel[channelID]
+	_, ok := gServerState.ChannelIDToChannel[channelID]
 	if ok {
 		// only delete if UA owns this channel
-		var index = -1
-		for p, v := range gServerState.UAIDToChannels[client.UAID] {
-			if v == channel {
-				delete(gServerState.ChannelIDToChannel, channelID)
-				index = p
-			}
-		}
-		if index >= 0 {
-			gServerState.UAIDToChannels[client.UAID] = append(gServerState.UAIDToChannels[client.UAID][:index], gServerState.UAIDToChannels[client.UAID][index+1:]...)
+		_, owns := gServerState.UAIDToChannelIDs[client.UAID][channelID]
+		if owns {
+			// remove ownership
+			delete(gServerState.UAIDToChannelIDs[client.UAID], channelID)
+			// delete the channel itself
+			delete(gServerState.ChannelIDToChannel, channelID)
 		}
 	}
 
@@ -204,7 +218,7 @@ func handleHello(client *Client, f map[string]interface{}) {
 				channelID := foo.(string)
 
 				c := &Channel{client.UAID, channelID, ""}
-				gServerState.UAIDToChannels[client.UAID] = append(gServerState.UAIDToChannels[client.UAID], c)
+				gServerState.UAIDToChannelIDs[client.UAID][channelID] = c
 				gServerState.ChannelIDToChannel[channelID] = c
 			}
 		}
@@ -404,9 +418,13 @@ func admin(w http.ResponseWriter, r *http.Request) {
 	// TODO https!
 	arguments := Arguments{"http://" + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix, nil}
 
-	for k := range gServerState.UAIDToChannels {
-		connected := gServerState.ConnectedClients[k] != nil
-		u := User{k, connected, gServerState.UAIDToChannels[k]}
+	for uaid, channelIDSet := range gServerState.UAIDToChannelIDs {
+		connected := gServerState.ConnectedClients[uaid] != nil
+		var channels []*Channel
+		for _, channel := range channelIDSet {
+			channels = append(channels, channel)
+		}
+		u := User{uaid, connected, channels}
 		arguments.Users = append(arguments.Users, u)
 	}
 
