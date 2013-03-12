@@ -40,7 +40,10 @@ type ChannelIDSet map[string]*Channel
 
 type ServerState struct {
 	// Mapping from a UAID to the Client object
-	ConnectedClients map[string]*Client `json:"connectedClients"`
+	// json field is "-" to prevent serialization
+	// since the connectedness of a client means nothing
+	// across sessions
+	ConnectedClients map[string]*Client `json:"-"`
 
 	// Mapping from a UAID to all channelIDs owned by that UAID
 	// where channelIDs are represented as a map-backed set
@@ -79,6 +82,7 @@ func openState() {
 	if err == nil {
 		err = json.Unmarshal(data, &gServerState)
 		if err == nil {
+			gServerState.ConnectedClients = make(map[string]*Client)
 			return
 		}
 	}
