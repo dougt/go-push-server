@@ -1,10 +1,9 @@
 package main
 
 import (
-	"uuid"
-	"go.net/websocket"
 	"encoding/json"
 	"fmt"
+	"go.net/websocket"
 	"io/ioutil"
 	"log"
 	"net"
@@ -14,6 +13,7 @@ import (
 	"strings"
 	"text/template"
 	"time"
+	"uuid"
 )
 
 type ServerConfig struct {
@@ -25,11 +25,11 @@ type ServerConfig struct {
 var gServerConfig ServerConfig
 
 type Client struct {
-	Websocket *websocket.Conn `json:"-"`
-	UAID      string          `json:"uaid"`
-	Ip        string          `json:"ip"`
-	Port      float64         `json:"port"`
-    LastContact time.Time     `json:"-"`
+	Websocket   *websocket.Conn `json:"-"`
+	UAID        string          `json:"uaid"`
+	Ip          string          `json:"ip"`
+	Port        float64         `json:"port"`
+	LastContact time.Time       `json:"-"`
 }
 
 type Channel struct {
@@ -56,6 +56,18 @@ type ServerState struct {
 }
 
 var gServerState ServerState
+
+type Notification struct {
+	Client  *Client
+	Channel *Channel
+}
+
+type Ack struct {
+	Channel *Channel
+}
+
+var notifyChan chan Notification
+var ackChan chan Ack
 
 func readConfig() {
 
@@ -224,9 +236,9 @@ func handleHello(client *Client, f map[string]interface{}) {
 			for _, foo := range f["channelIDs"].([]interface{}) {
 				channelID := foo.(string)
 
-                if gServerState.UAIDToChannelIDs[client.UAID] == nil {
-                    gServerState.UAIDToChannelIDs[client.UAID] = make(ChannelIDSet)
-                }
+				if gServerState.UAIDToChannelIDs[client.UAID] == nil {
+					gServerState.UAIDToChannelIDs[client.UAID] = make(ChannelIDSet)
+				}
 				c := &Channel{client.UAID, channelID, ""}
 				gServerState.UAIDToChannelIDs[client.UAID][channelID] = c
 				gServerState.ChannelIDToChannel[channelID] = c
@@ -277,7 +289,7 @@ func pushHandler(ws *websocket.Conn) {
 			break
 		}
 
-        client.LastContact = time.Now()
+		client.LastContact = time.Now()
 		log.Println("pushHandler msg: ", f["messageType"])
 
 		switch f["messageType"] {
@@ -350,23 +362,15 @@ func notifyHandler(w http.ResponseWriter, r *http.Request) {
 
 	saveState()
 
-	if client == nil {
-		log.Println("no known client for the channel.")
-	} else if client.Websocket == nil {
-		wakeupClient(client)
-	} else {
-		sendNotificationToClient(client, channel)
-	}
+	log.Println("Blocked here")
+	notifyChan <- Notification{client, channel}
+	log.Println("UnBlocked here")
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }
 
 func wakeupClient(client *Client) {
-
-	// TODO probably want to do this a few times before
-	// giving up.
-
 	log.Println("wakeupClient: ", client)
 	service := fmt.Sprintf("%s:%g", client.Ip, client.Port)
 
@@ -414,11 +418,48 @@ func sendNotificationToClient(client *Client, channel *Channel) {
 }
 
 func disconnectUDPClient(uaid string) {
-    if gServerState.ConnectedClients[uaid].Websocket == nil {
-        return
-    }
-    gServerState.ConnectedClients[uaid].Websocket.CloseWithStatus(4774)
+	if gServerState.ConnectedClients[uaid].Websocket == nil {
+		return
+	}
+	gServerState.ConnectedClients[uaid].Websocket.CloseWithStatus(4774)
 	gServerState.ConnectedClients[uaid].Websocket = nil
+}
+
+func attemptDelivery(notification Notification) {
+	log.Println("AttemptDelivery ", notification)
+	if notification.Client == nil {
+		log.Println("no known client for the channel.")
+	} else if notification.Client.Websocket == nil {
+		wakeupClient(notification.Client)
+	} else {
+		sendNotificationToClient(notification.Client, notification.Channel)
+	}
+
+}
+
+func deliverNotifications(notifyChan chan Notification, ackChan chan Ack) {
+	pending := make([]Notification, 0)
+	lastAttempt := time.Now()
+	for {
+		select {
+		case newPending := <-notifyChan:
+			log.Println("Got new notification to deliver ", newPending)
+			pending = append(pending, newPending)
+			attemptDelivery(newPending)
+
+		case newAck := <-ackChan:
+			log.Println("Got new ACK ", newAck)
+
+		case <-time.After(10 * time.Millisecond):
+			if time.Since(lastAttempt).Seconds() > 15 {
+				lastAttempt = time.Now()
+				log.Println("Attempting to deliver ", len(pending), " pending notifications")
+				for _, notification := range pending {
+					attemptDelivery(notification)
+				}
+			}
+		}
+	}
 }
 
 func admin(w http.ResponseWriter, r *http.Request) {
@@ -463,23 +504,28 @@ func main() {
 
 	openState()
 
+	notifyChan = make(chan Notification)
+	ackChan = make(chan Ack)
+
 	http.HandleFunc("/admin", admin)
 
 	http.Handle("/", websocket.Handler(pushHandler))
 
 	http.HandleFunc(gServerConfig.NotifyPrefix, notifyHandler)
 
+	go deliverNotifications(notifyChan, ackChan)
+
 	go func() {
-        c := time.Tick(10 * time.Second)
-        for now := range c {
-            for uaid, client := range gServerState.ConnectedClients {
-                if now.Sub(client.LastContact) > 15 && client.Ip != "" {
-                    log.Println("Will wake up ", client.Ip, ". closing connection")
-                    disconnectUDPClient(uaid)
-                }
-            }
-        }
-    }()
+		c := time.Tick(10 * time.Second)
+		for now := range c {
+			for uaid, client := range gServerState.ConnectedClients {
+				if now.Sub(client.LastContact).Seconds() > 15 && client.Ip != "" {
+					log.Println("Will wake up ", client.Ip, ". closing connection")
+					disconnectUDPClient(uaid)
+				}
+			}
+		}
+	}()
 
 	log.Println("Listening on", gServerConfig.Hostname+":"+gServerConfig.Port)
 	log.Fatal(http.ListenAndServe(gServerConfig.Hostname+":"+gServerConfig.Port, nil))
