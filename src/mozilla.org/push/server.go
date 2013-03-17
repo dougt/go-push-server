@@ -1,10 +1,9 @@
 package main
 
 import (
-	"uuid"
-	"go.net/websocket"
 	"encoding/json"
 	"fmt"
+	"go.net/websocket"
 	"io/ioutil"
 	"log"
 	"net"
@@ -14,22 +13,26 @@ import (
 	"strings"
 	"text/template"
 	"time"
+	"uuid"
 )
 
 type ServerConfig struct {
 	Hostname     string `json:"hostname"`
 	Port         string `json:"port"`
 	NotifyPrefix string `json:"notifyPrefix"`
+	UseTLS       bool   `json:"useTLS"`
+	CertFilename string `json:"certFilename"`
+	KeyFilename  string `json:"keyFilename"`
 }
 
 var gServerConfig ServerConfig
 
 type Client struct {
-	Websocket *websocket.Conn `json:"-"`
-	UAID      string          `json:"uaid"`
-	Ip        string          `json:"ip"`
-	Port      float64         `json:"port"`
-    LastContact time.Time     `json:"-"`
+	Websocket   *websocket.Conn `json:"-"`
+	UAID        string          `json:"uaid"`
+	Ip          string          `json:"ip"`
+	Port        float64         `json:"port"`
+	LastContact time.Time       `json:"-"`
 }
 
 type Channel struct {
@@ -129,8 +132,15 @@ func handleRegister(client *Client, f map[string]interface{}) {
 	if exists && prevEntry.UAID != client.UAID {
 		register.Status = 409
 	} else {
-		// TODO https!
-		var pushEndpoint = "http://" + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix + channelID
+
+		var scheme string
+		if gServerConfig.UseTLS {
+			scheme = "https://"
+		} else {
+			scheme = "http://"
+		}
+
+		pushEndpoint := scheme + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix + channelID
 
 		channel := &Channel{client.UAID, channelID, ""}
 
@@ -224,9 +234,9 @@ func handleHello(client *Client, f map[string]interface{}) {
 			for _, foo := range f["channelIDs"].([]interface{}) {
 				channelID := foo.(string)
 
-                if gServerState.UAIDToChannelIDs[client.UAID] == nil {
-                    gServerState.UAIDToChannelIDs[client.UAID] = make(ChannelIDSet)
-                }
+				if gServerState.UAIDToChannelIDs[client.UAID] == nil {
+					gServerState.UAIDToChannelIDs[client.UAID] = make(ChannelIDSet)
+				}
 				c := &Channel{client.UAID, channelID, ""}
 				gServerState.UAIDToChannelIDs[client.UAID][channelID] = c
 				gServerState.ChannelIDToChannel[channelID] = c
@@ -277,7 +287,7 @@ func pushHandler(ws *websocket.Conn) {
 			break
 		}
 
-        client.LastContact = time.Now()
+		client.LastContact = time.Now()
 		log.Println("pushHandler msg: ", f["messageType"])
 
 		switch f["messageType"] {
@@ -414,10 +424,10 @@ func sendNotificationToClient(client *Client, channel *Channel) {
 }
 
 func disconnectUDPClient(uaid string) {
-    if gServerState.ConnectedClients[uaid].Websocket == nil {
-        return
-    }
-    gServerState.ConnectedClients[uaid].Websocket.CloseWithStatus(4774)
+	if gServerState.ConnectedClients[uaid].Websocket == nil {
+		return
+	}
+	gServerState.ConnectedClients[uaid].Websocket.CloseWithStatus(4774)
 	gServerState.ConnectedClients[uaid].Websocket = nil
 }
 
@@ -439,8 +449,14 @@ func admin(w http.ResponseWriter, r *http.Request) {
 		Users              []User
 	}
 
-	// TODO https!
-	arguments := Arguments{"http://" + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix, totalMemory, nil}
+	var scheme string
+	if gServerConfig.UseTLS {
+		scheme = "https://"
+	} else {
+		scheme = "http://"
+	}
+
+	arguments := Arguments{scheme + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix, totalMemory, nil}
 
 	for uaid, channelIDSet := range gServerState.UAIDToChannelIDs {
 		connected := gServerState.ConnectedClients[uaid] != nil
@@ -470,17 +486,31 @@ func main() {
 	http.HandleFunc(gServerConfig.NotifyPrefix, notifyHandler)
 
 	go func() {
-        c := time.Tick(10 * time.Second)
-        for now := range c {
-            for uaid, client := range gServerState.ConnectedClients {
-                if now.Sub(client.LastContact) > 15 && client.Ip != "" {
-                    log.Println("Will wake up ", client.Ip, ". closing connection")
-                    disconnectUDPClient(uaid)
-                }
-            }
-        }
-    }()
+		c := time.Tick(10 * time.Second)
+		for now := range c {
+			for uaid, client := range gServerState.ConnectedClients {
+				if now.Sub(client.LastContact) > 15 && client.Ip != "" {
+					log.Println("Will wake up ", client.Ip, ". closing connection")
+					disconnectUDPClient(uaid)
+				}
+			}
+		}
+	}()
 
 	log.Println("Listening on", gServerConfig.Hostname+":"+gServerConfig.Port)
-	log.Fatal(http.ListenAndServe(gServerConfig.Hostname+":"+gServerConfig.Port, nil))
+
+	var err error
+	if gServerConfig.UseTLS {
+		err = http.ListenAndServeTLS(gServerConfig.Hostname+":"+gServerConfig.Port,
+			gServerConfig.CertFilename,
+			gServerConfig.KeyFilename,
+			nil)
+	} else {
+		for i := 0; i < 5; i++ {
+			log.Println("This is a really unsafe way to run the push server.  Really.  Don't do this in production.")
+		}
+		err = http.ListenAndServe(gServerConfig.Hostname+":"+gServerConfig.Port, nil)
+	}
+
+	log.Println("Exiting... ", err)
 }
