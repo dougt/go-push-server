@@ -489,7 +489,7 @@ func main() {
 		c := time.Tick(10 * time.Second)
 		for now := range c {
 			for uaid, client := range gServerState.ConnectedClients {
-				if now.Sub(client.LastContact) > 15 && client.Ip != "" {
+				if now.Sub(client.LastContact).Seconds() > 15 && client.Ip != "" {
 					log.Println("Will wake up ", client.Ip, ". closing connection")
 					disconnectUDPClient(uaid)
 				}
