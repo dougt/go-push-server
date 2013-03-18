@@ -111,6 +111,17 @@ func saveState() {
 	ioutil.WriteFile("serverstate.json", data, 0644)
 }
 
+func makeNotifyURL(suffix string) string {
+	var scheme string
+	if gServerConfig.UseTLS {
+		scheme = "https://"
+	} else {
+		scheme = "http://"
+	}
+
+	return scheme + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix + suffix
+}
+
 func handleRegister(client *Client, f map[string]interface{}) {
 	type RegisterResponse struct {
 		Name         string `json:"messageType"`
@@ -133,15 +144,6 @@ func handleRegister(client *Client, f map[string]interface{}) {
 		register.Status = 409
 	} else {
 
-		var scheme string
-		if gServerConfig.UseTLS {
-			scheme = "https://"
-		} else {
-			scheme = "http://"
-		}
-
-		pushEndpoint := scheme + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix + channelID
-
 		channel := &Channel{client.UAID, channelID, ""}
 
 		if gServerState.UAIDToChannelIDs[client.UAID] == nil {
@@ -151,7 +153,7 @@ func handleRegister(client *Client, f map[string]interface{}) {
 		gServerState.ChannelIDToChannel[channelID] = channel
 
 		register.Status = 200
-		register.PushEndpoint = pushEndpoint
+		register.PushEndpoint = makeNotifyURL(channelID)
 	}
 
 	if register.Status == 0 {
@@ -449,14 +451,7 @@ func admin(w http.ResponseWriter, r *http.Request) {
 		Users              []User
 	}
 
-	var scheme string
-	if gServerConfig.UseTLS {
-		scheme = "https://"
-	} else {
-		scheme = "http://"
-	}
-
-	arguments := Arguments{scheme + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix, totalMemory, nil}
+	arguments := Arguments{makeNotifyURL(""), totalMemory, nil}
 
 	for uaid, channelIDSet := range gServerState.UAIDToChannelIDs {
 		connected := gServerState.ConnectedClients[uaid] != nil
