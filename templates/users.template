@@ -90,7 +90,7 @@ function sendNotification(id, currentVersion) {
         {{range .}}
             <dd>
               <button type="button" onClick="unregister('{{.ChannelID}}')">Unregister</button>
-              <button type="button" onClick="sendNotification('{{.ChannelID}}', {{.Version}})">Update</button>
+              <button type="button" onClick="sendNotification('{{.ChannelID}}', '{{.Version}}')">Update</button>
               {{.ChannelID}}  (Version: {{.Version}})
             </dd>
           {{end}}
