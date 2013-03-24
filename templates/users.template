@@ -53,10 +53,7 @@ function unregister(id) {
   }
 }
 
-
-var version = 0;
-
-function sendNotification(id) {
+function sendNotification(id, currentVersion) {
 
   var request = new XMLHttpRequest();
 
@@ -72,8 +69,7 @@ function sendNotification(id) {
 
   request.open("PUT", pushEndpoint, true);
   request.setRequestHeader('Content-type','application/x-www-form-urlencoded');
-  request.send("version=" + ++version);
-  version++;
+  request.send("version=" + Number(new Date()));
 }
 </script>
 
@@ -94,7 +90,7 @@ function sendNotification(id) {
         {{range .}}
             <dd>
               <button type="button" onClick="unregister('{{.ChannelID}}')">Unregister</button>
-              <button type="button" onClick="sendNotification('{{.ChannelID}}')">Update</button>
+              <button type="button" onClick="sendNotification('{{.ChannelID}}', {{.Version}})">Update</button>
               {{.ChannelID}}  (Version: {{.Version}})
             </dd>
           {{end}}
