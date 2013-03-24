@@ -38,7 +38,7 @@ type Client struct {
 type Channel struct {
 	UAID      string `json:"uaid"`
 	ChannelID string `json:"channelID"`
-	Version   string `json:"version"`
+	Version   uint64 `json:"version"`
 }
 
 type ChannelIDSet map[string]*Channel
@@ -144,7 +144,7 @@ func handleRegister(client *Client, f map[string]interface{}) {
 		register.Status = 409
 	} else {
 
-		channel := &Channel{client.UAID, channelID, ""}
+		channel := &Channel{client.UAID, channelID, 0}
 
 		if gServerState.UAIDToChannelIDs[client.UAID] == nil {
 			gServerState.UAIDToChannelIDs[client.UAID] = make(ChannelIDSet)
@@ -239,7 +239,7 @@ func handleHello(client *Client, f map[string]interface{}) {
 				if gServerState.UAIDToChannelIDs[client.UAID] == nil {
 					gServerState.UAIDToChannelIDs[client.UAID] = make(ChannelIDSet)
 				}
-				c := &Channel{client.UAID, channelID, ""}
+				c := &Channel{client.UAID, channelID, 0}
 				gServerState.UAIDToChannelIDs[client.UAID][channelID] = c
 				gServerState.ChannelIDToChannel[channelID] = c
 			}
@@ -342,21 +342,12 @@ func notifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	value := r.FormValue("version")
-
-	if value == "" {
-		log.Println("Could not find version")
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("Could not find version."))
-		return
-	}
-
 	channel, found := gServerState.ChannelIDToChannel[channelID]
 	if !found {
 		log.Println("Could not find channel " + channelID)
 		return
 	}
-	channel.Version = value
+	channel.Version++
 
 	client := gServerState.ConnectedClients[channel.UAID]
 
