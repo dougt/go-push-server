@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -66,7 +67,8 @@ type Notification struct {
 }
 
 type Ack struct {
-	Channel *Channel
+	ChannelID string
+	Version   uint64
 }
 
 var notifyChan chan Notification
@@ -286,6 +288,14 @@ func handleHello(client *Client, f map[string]interface{}) {
 }
 
 func handleAck(client *Client, f map[string]interface{}) {
+	log.Println("HandleAck ", f)
+	for _, update := range f["updates"].([]interface{}) {
+		typeConverted := update.(map[string]string)
+		version, _ := strconv.ParseUint(typeConverted["version"], 10, 64)
+		ack := Ack{typeConverted["channelID"], version}
+		log.Println(ack)
+		ackChan <- ack
+	}
 }
 
 func pushHandler(ws *websocket.Conn) {
@@ -332,7 +342,11 @@ func pushHandler(ws *websocket.Conn) {
 	log.Println("Closing Websocket!")
 	ws.Close()
 
-	gServerState.ConnectedClients[client.UAID].Websocket = nil
+	// if a client disconnected before completing the handshake
+	// it'll have an empty UAID
+	if client.UAID != "" {
+		gServerState.ConnectedClients[client.UAID].Websocket = nil
+	}
 }
 
 func notifyHandler(w http.ResponseWriter, r *http.Request) {
@@ -441,13 +455,15 @@ func attemptDelivery(notification Notification) {
 }
 
 func deliverNotifications(notifyChan chan Notification, ackChan chan Ack) {
-	pending := make([]Notification, 0)
+	// indexed by channelID so that new notifications
+	// automatically remove old ones
+	pending := make(map[string]Notification, 0)
 	lastAttempt := time.Now()
 	for {
 		select {
 		case newPending := <-notifyChan:
 			log.Println("Got new notification to deliver ", newPending)
-			pending = append(pending, newPending)
+			pending[newPending.Channel.ChannelID] = newPending
 			attemptDelivery(newPending)
 
 		case newAck := <-ackChan:
