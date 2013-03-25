@@ -1,10 +1,9 @@
 package main
 
 import (
-	"uuid"
-	"go.net/websocket"
 	"encoding/json"
 	"fmt"
+	"go.net/websocket"
 	"io/ioutil"
 	"log"
 	"net"
@@ -14,6 +13,7 @@ import (
 	"strings"
 	"text/template"
 	"time"
+	"uuid"
 )
 
 type ServerConfig struct {
@@ -25,11 +25,11 @@ type ServerConfig struct {
 var gServerConfig ServerConfig
 
 type Client struct {
-	Websocket *websocket.Conn `json:"-"`
-	UAID      string          `json:"uaid"`
-	Ip        string          `json:"ip"`
-	Port      float64         `json:"port"`
-    LastContact time.Time     `json:"-"`
+	Websocket   *websocket.Conn `json:"-"`
+	UAID        string          `json:"uaid"`
+	Ip          string          `json:"ip"`
+	Port        float64         `json:"port"`
+	LastContact time.Time       `json:"-"`
 }
 
 type Channel struct {
@@ -224,9 +224,9 @@ func handleHello(client *Client, f map[string]interface{}) {
 			for _, foo := range f["channelIDs"].([]interface{}) {
 				channelID := foo.(string)
 
-                if gServerState.UAIDToChannelIDs[client.UAID] == nil {
-                    gServerState.UAIDToChannelIDs[client.UAID] = make(ChannelIDSet)
-                }
+				if gServerState.UAIDToChannelIDs[client.UAID] == nil {
+					gServerState.UAIDToChannelIDs[client.UAID] = make(ChannelIDSet)
+				}
 				c := &Channel{client.UAID, channelID, ""}
 				gServerState.UAIDToChannelIDs[client.UAID][channelID] = c
 				gServerState.ChannelIDToChannel[channelID] = c
@@ -277,7 +277,7 @@ func pushHandler(ws *websocket.Conn) {
 			break
 		}
 
-        client.LastContact = time.Now()
+		client.LastContact = time.Now()
 		log.Println("pushHandler msg: ", f["messageType"])
 
 		switch f["messageType"] {
@@ -414,10 +414,10 @@ func sendNotificationToClient(client *Client, channel *Channel) {
 }
 
 func disconnectUDPClient(uaid string) {
-    if gServerState.ConnectedClients[uaid].Websocket == nil {
-        return
-    }
-    gServerState.ConnectedClients[uaid].Websocket.CloseWithStatus(4774)
+	if gServerState.ConnectedClients[uaid].Websocket == nil {
+		return
+	}
+	gServerState.ConnectedClients[uaid].Websocket.CloseWithStatus(4774)
 	gServerState.ConnectedClients[uaid].Websocket = nil
 }
 
@@ -470,16 +470,16 @@ func main() {
 	http.HandleFunc(gServerConfig.NotifyPrefix, notifyHandler)
 
 	go func() {
-        c := time.Tick(10 * time.Second)
-        for now := range c {
-            for uaid, client := range gServerState.ConnectedClients {
-                if now.Sub(client.LastContact) > 15 && client.Ip != "" {
-                    log.Println("Will wake up ", client.Ip, ". closing connection")
-                    disconnectUDPClient(uaid)
-                }
-            }
-        }
-    }()
+		c := time.Tick(10 * time.Second)
+		for now := range c {
+			for uaid, client := range gServerState.ConnectedClients {
+				if now.Sub(client.LastContact) > 15 && client.Ip != "" {
+					log.Println("Will wake up ", client.Ip, ". closing connection")
+					disconnectUDPClient(uaid)
+				}
+			}
+		}
+	}()
 
 	log.Println("Listening on", gServerConfig.Hostname+":"+gServerConfig.Port)
 	log.Fatal(http.ListenAndServe(gServerConfig.Hostname+":"+gServerConfig.Port, nil))
