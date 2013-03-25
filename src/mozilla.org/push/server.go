@@ -20,6 +20,9 @@ type ServerConfig struct {
 	Hostname     string `json:"hostname"`
 	Port         string `json:"port"`
 	NotifyPrefix string `json:"notifyPrefix"`
+	UseTLS       bool   `json:"useTLS"`
+	CertFilename string `json:"certFilename"`
+	KeyFilename  string `json:"keyFilename"`
 }
 
 var gServerConfig ServerConfig
@@ -35,7 +38,7 @@ type Client struct {
 type Channel struct {
 	UAID      string `json:"uaid"`
 	ChannelID string `json:"channelID"`
-	Version   string `json:"version"`
+	Version   uint64 `json:"version"`
 }
 
 type ChannelIDSet map[string]*Channel
@@ -120,6 +123,17 @@ func saveState() {
 	ioutil.WriteFile("serverstate.json", data, 0644)
 }
 
+func makeNotifyURL(suffix string) string {
+	var scheme string
+	if gServerConfig.UseTLS {
+		scheme = "https://"
+	} else {
+		scheme = "http://"
+	}
+
+	return scheme + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix + suffix
+}
+
 func handleRegister(client *Client, f map[string]interface{}) {
 	type RegisterResponse struct {
 		Name         string `json:"messageType"`
@@ -141,10 +155,8 @@ func handleRegister(client *Client, f map[string]interface{}) {
 	if exists && prevEntry.UAID != client.UAID {
 		register.Status = 409
 	} else {
-		// TODO https!
-		var pushEndpoint = "http://" + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix + channelID
 
-		channel := &Channel{client.UAID, channelID, ""}
+		channel := &Channel{client.UAID, channelID, 0}
 
 		if gServerState.UAIDToChannelIDs[client.UAID] == nil {
 			gServerState.UAIDToChannelIDs[client.UAID] = make(ChannelIDSet)
@@ -153,7 +165,7 @@ func handleRegister(client *Client, f map[string]interface{}) {
 		gServerState.ChannelIDToChannel[channelID] = channel
 
 		register.Status = 200
-		register.PushEndpoint = pushEndpoint
+		register.PushEndpoint = makeNotifyURL(channelID)
 	}
 
 	if register.Status == 0 {
@@ -239,7 +251,7 @@ func handleHello(client *Client, f map[string]interface{}) {
 				if gServerState.UAIDToChannelIDs[client.UAID] == nil {
 					gServerState.UAIDToChannelIDs[client.UAID] = make(ChannelIDSet)
 				}
-				c := &Channel{client.UAID, channelID, ""}
+				c := &Channel{client.UAID, channelID, 0}
 				gServerState.UAIDToChannelIDs[client.UAID][channelID] = c
 				gServerState.ChannelIDToChannel[channelID] = c
 			}
@@ -342,21 +354,12 @@ func notifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	value := r.FormValue("version")
-
-	if value == "" {
-		log.Println("Could not find version")
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("Could not find version."))
-		return
-	}
-
 	channel, found := gServerState.ChannelIDToChannel[channelID]
 	if !found {
 		log.Println("Could not find channel " + channelID)
 		return
 	}
-	channel.Version = value
+	channel.Version++
 
 	client := gServerState.ConnectedClients[channel.UAID]
 
@@ -480,11 +483,10 @@ func admin(w http.ResponseWriter, r *http.Request) {
 		Users              []User
 	}
 
-	// TODO https!
-	arguments := Arguments{"http://" + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix, totalMemory, nil}
+	arguments := Arguments{makeNotifyURL(""), totalMemory, nil}
 
 	for uaid, channelIDSet := range gServerState.UAIDToChannelIDs {
-		connected := gServerState.ConnectedClients[uaid] != nil
+		connected := gServerState.ConnectedClients[uaid].Websocket != nil
 		var channels []*Channel
 		for _, channel := range channelIDSet {
 			channels = append(channels, channel)
@@ -528,5 +530,19 @@ func main() {
 	}()
 
 	log.Println("Listening on", gServerConfig.Hostname+":"+gServerConfig.Port)
-	log.Fatal(http.ListenAndServe(gServerConfig.Hostname+":"+gServerConfig.Port, nil))
+
+	var err error
+	if gServerConfig.UseTLS {
+		err = http.ListenAndServeTLS(gServerConfig.Hostname+":"+gServerConfig.Port,
+			gServerConfig.CertFilename,
+			gServerConfig.KeyFilename,
+			nil)
+	} else {
+		for i := 0; i < 5; i++ {
+			log.Println("This is a really unsafe way to run the push server.  Really.  Don't do this in production.")
+		}
+		err = http.ListenAndServe(gServerConfig.Hostname+":"+gServerConfig.Port, nil)
+	}
+
+	log.Println("Exiting... ", err)
 }
