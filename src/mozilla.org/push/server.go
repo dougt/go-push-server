@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -62,7 +61,7 @@ type ServerState struct {
 var gServerState ServerState
 
 type Notification struct {
-	Client  *Client
+	UAID    string
 	Channel *Channel
 }
 
@@ -288,11 +287,10 @@ func handleHello(client *Client, f map[string]interface{}) {
 }
 
 func handleAck(client *Client, f map[string]interface{}) {
-	log.Println("HandleAck ", f)
 	for _, update := range f["updates"].([]interface{}) {
-		typeConverted := update.(map[string]string)
-		version, _ := strconv.ParseUint(typeConverted["version"], 10, 64)
-		ack := Ack{typeConverted["channelID"], version}
+		typeConverted := update.(map[string]interface{})
+		version := uint64(typeConverted["version"].(float64))
+		ack := Ack{typeConverted["channelID"].(string), version}
 		log.Println(ack)
 		ackChan <- ack
 	}
@@ -375,13 +373,9 @@ func notifyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	channel.Version++
 
-	client := gServerState.ConnectedClients[channel.UAID]
-
 	saveState()
 
-	log.Println("Blocked here")
-	notifyChan <- Notification{client, channel}
-	log.Println("UnBlocked here")
+	notifyChan <- Notification{channel.UAID, channel}
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
@@ -444,12 +438,13 @@ func disconnectUDPClient(uaid string) {
 
 func attemptDelivery(notification Notification) {
 	log.Println("AttemptDelivery ", notification)
-	if notification.Client == nil {
-		log.Println("no known client for the channel.")
-	} else if notification.Client.Websocket == nil {
-		wakeupClient(notification.Client)
+	client, ok := gServerState.ConnectedClients[notification.UAID]
+	if !ok {
+		log.Println("no connected/wake-capable client for the channel.")
+	} else if client.Websocket == nil {
+		wakeupClient(client)
 	} else {
-		sendNotificationToClient(notification.Client, notification.Channel)
+		sendNotificationToClient(client, notification.Channel)
 	}
 
 }
@@ -457,6 +452,9 @@ func attemptDelivery(notification Notification) {
 func deliverNotifications(notifyChan chan Notification, ackChan chan Ack) {
 	// indexed by channelID so that new notifications
 	// automatically remove old ones
+	// if a new version comes in for a 'pending' channelID
+	// that's ok, because if the client gives an ack for an older
+	// version we just ignore it and try to deliver the new version
 	pending := make(map[string]Notification, 0)
 	lastAttempt := time.Now()
 	for {
@@ -468,6 +466,17 @@ func deliverNotifications(notifyChan chan Notification, ackChan chan Ack) {
 
 		case newAck := <-ackChan:
 			log.Println("Got new ACK ", newAck)
+			entry, ok := pending[newAck.ChannelID]
+			if ok {
+				// if Version < newAck.Version
+				//   the client acknowledged a future notification, bad client
+				// if Version > newAck.Version
+				//   the client acknowledged an old notification, ignore
+				if entry.Channel.Version == newAck.Version {
+					log.Println("Deleting from pending")
+					delete(pending, entry.Channel.ChannelID)
+				}
+			}
 
 		case <-time.After(10 * time.Millisecond):
 			if time.Since(lastAttempt).Seconds() > 15 {
