@@ -60,6 +60,19 @@ type ServerState struct {
 
 var gServerState ServerState
 
+type Notification struct {
+	UAID    string
+	Channel *Channel
+}
+
+type Ack struct {
+	ChannelID string
+	Version   uint64
+}
+
+var notifyChan chan Notification
+var ackChan chan Ack
+
 func readConfig() {
 
 	var data []byte
@@ -274,6 +287,13 @@ func handleHello(client *Client, f map[string]interface{}) {
 }
 
 func handleAck(client *Client, f map[string]interface{}) {
+	for _, update := range f["updates"].([]interface{}) {
+		typeConverted := update.(map[string]interface{})
+		version := uint64(typeConverted["version"].(float64))
+		ack := Ack{typeConverted["channelID"].(string), version}
+		log.Println(ack)
+		ackChan <- ack
+	}
 }
 
 func pushHandler(ws *websocket.Conn) {
@@ -320,7 +340,11 @@ func pushHandler(ws *websocket.Conn) {
 	log.Println("Closing Websocket!")
 	ws.Close()
 
-	gServerState.ConnectedClients[client.UAID].Websocket = nil
+	// if a client disconnected before completing the handshake
+	// it'll have an empty UAID
+	if client.UAID != "" {
+		gServerState.ConnectedClients[client.UAID].Websocket = nil
+	}
 }
 
 func notifyHandler(w http.ResponseWriter, r *http.Request) {
@@ -349,27 +373,15 @@ func notifyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	channel.Version++
 
-	client := gServerState.ConnectedClients[channel.UAID]
-
 	saveState()
 
-	if client == nil {
-		log.Println("no known client for the channel.")
-	} else if client.Websocket == nil {
-		wakeupClient(client)
-	} else {
-		sendNotificationToClient(client, channel)
-	}
+	notifyChan <- Notification{channel.UAID, channel}
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }
 
 func wakeupClient(client *Client) {
-
-	// TODO probably want to do this a few times before
-	// giving up.
-
 	log.Println("wakeupClient: ", client)
 	service := fmt.Sprintf("%s:%g", client.Ip, client.Port)
 
@@ -424,6 +436,60 @@ func disconnectUDPClient(uaid string) {
 	gServerState.ConnectedClients[uaid].Websocket = nil
 }
 
+func attemptDelivery(notification Notification) {
+	log.Println("AttemptDelivery ", notification)
+	client, ok := gServerState.ConnectedClients[notification.UAID]
+	if !ok {
+		log.Println("no connected/wake-capable client for the channel.")
+	} else if client.Websocket == nil {
+		wakeupClient(client)
+	} else {
+		sendNotificationToClient(client, notification.Channel)
+	}
+
+}
+
+func deliverNotifications(notifyChan chan Notification, ackChan chan Ack) {
+	// indexed by channelID so that new notifications
+	// automatically remove old ones
+	// if a new version comes in for a 'pending' channelID
+	// that's ok, because if the client gives an ack for an older
+	// version we just ignore it and try to deliver the new version
+	pending := make(map[string]Notification, 0)
+	lastAttempt := time.Now()
+	for {
+		select {
+		case newPending := <-notifyChan:
+			log.Println("Got new notification to deliver ", newPending)
+			pending[newPending.Channel.ChannelID] = newPending
+			attemptDelivery(newPending)
+
+		case newAck := <-ackChan:
+			log.Println("Got new ACK ", newAck)
+			entry, ok := pending[newAck.ChannelID]
+			if ok {
+				// if Version < newAck.Version
+				//   the client acknowledged a future notification, bad client
+				// if Version > newAck.Version
+				//   the client acknowledged an old notification, ignore
+				if entry.Channel.Version == newAck.Version {
+					log.Println("Deleting from pending")
+					delete(pending, entry.Channel.ChannelID)
+				}
+			}
+
+		case <-time.After(10 * time.Millisecond):
+			if time.Since(lastAttempt).Seconds() > 15 {
+				lastAttempt = time.Now()
+				log.Println("Attempting to deliver ", len(pending), " pending notifications")
+				for _, notification := range pending {
+					attemptDelivery(notification)
+				}
+			}
+		}
+	}
+}
+
 func admin(w http.ResponseWriter, r *http.Request) {
 
 	memstats := new(runtime.MemStats)
@@ -465,11 +531,16 @@ func main() {
 
 	openState()
 
+	notifyChan = make(chan Notification)
+	ackChan = make(chan Ack)
+
 	http.HandleFunc("/admin", admin)
 
 	http.Handle("/", websocket.Handler(pushHandler))
 
 	http.HandleFunc(gServerConfig.NotifyPrefix, notifyHandler)
+
+	go deliverNotifications(notifyChan, ackChan)
 
 	go func() {
 		c := time.Tick(10 * time.Second)
