@@ -261,10 +261,13 @@ func handleHello(client *Client, f map[string]interface{}) {
 
 	gServerState.ConnectedClients[client.UAID] = client
 
-	if f["interface"] != nil {
-		m := f["interface"].(map[string]interface{})
+	if f["wakeup_hostport"] != nil {
+		m := f["wakeup_hostport"].(map[string]interface{})
 		client.Ip = m["ip"].(string)
 		client.Port = m["port"].(float64)
+		log.Println("Got hostport pair ", client.Ip, client.Port)
+	} else {
+		log.Println("No hostport ", f)
 	}
 
 	type HelloResponse struct {
