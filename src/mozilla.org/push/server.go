@@ -239,23 +239,39 @@ func handleHello(client *Client, f map[string]interface{}) {
 	} else {
 		client.UAID = f["uaid"].(string)
 
-		// BUG(nikhilm): Does not deal with sending
-		// a new UAID if their is a channel that was sent
-		// by the UA which the server does not know about.
-		// Which means in the case of this memory only server
-		// it should actually always send a new UAID when it was
-		// restarted
+		resetClient := false
+
 		if f["channelIDs"] != nil {
 			for _, foo := range f["channelIDs"].([]interface{}) {
 				channelID := foo.(string)
 
 				if gServerState.UAIDToChannelIDs[client.UAID] == nil {
 					gServerState.UAIDToChannelIDs[client.UAID] = make(ChannelIDSet)
+					// since we don't have any channelIDs, don't bother looping any more
+					resetClient = true
+					break
 				}
-				c := &Channel{client.UAID, channelID, 0}
-				gServerState.UAIDToChannelIDs[client.UAID][channelID] = c
-				gServerState.ChannelIDToChannel[channelID] = c
+
+				if _, ok := gServerState.UAIDToChannelIDs[client.UAID][channelID]; !ok {
+					resetClient = true
+					break
+				}
 			}
+		}
+
+		if resetClient {
+			// delete the older connection
+			delete(gServerState.ConnectedClients, client.UAID)
+			delete(gServerState.UAIDToChannelIDs, client.UAID)
+			// TODO(nsm) clear up ChannelIDToChannels which now has extra
+			// channelIDs not associated with any client
+
+			uaid, err := uuid.GenUUID()
+			if err != nil {
+				status = 400
+				log.Println("GenUUID error %s", err)
+			}
+			client.UAID = uaid
 		}
 	}
 
