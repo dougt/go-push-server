@@ -28,28 +28,28 @@
 
 
 function requestPush() {
-  var req = navigator.pushNotification.register();
+  var req = navigator.push.register();
 
   req.onsuccess = function(e) {
-    alert(e.target.result.pushEndpoint);
+    alert("register() succeeded: endpoint=" + e.target.result.pushEndpoint);
   }
 
   req.onerror = function(e) {
-   alert("Error: " + JSON.stringify(e));
+   alert("register() failed: error=" + JSON.stringify(e));
   }
 }
 
 function unregister(id) {
   var pushEndpoint = "{{.PushEndpointPrefix}}" + id;
 
-  var req = navigator.pushNotification.unregister(pushEndpoint);
+  var req = navigator.push.unregister(pushEndpoint);
 
   req.onsuccess = function(e) {
-    alert("unregistered successful = " + id);
+    alert("unregister() succeeded: id=" + id);
   }
 
   req.onerror = function(e) {
-    alert("unregistered failed = " + id);
+    alert("unregister() failed: id=" + id + ", error=" + JSON.stringify(e));
   }
 }
 
@@ -58,11 +58,11 @@ function sendNotification(id, currentVersion) {
   var request = new XMLHttpRequest();
 
   request.onload = function(e) {
-    alert(pushEndpoint + "Updated!");
+    alert("update succeeded: endpoint=" + pushEndpoint);
   };
 
   request.onerror = function(e) {
-    alert(pushEndpoint + "Error Updating!");
+    alert("update failed: endpoint=" + pushEndpoint + ", error=" + JSON.stringify(e));
   };
 
   var pushEndpoint = "{{.PushEndpointPrefix}}" + id;
