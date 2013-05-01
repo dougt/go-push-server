@@ -26,12 +26,11 @@
 
 <script>
 
-
 function requestPush() {
   var req = navigator.push.register();
 
   req.onsuccess = function(e) {
-    alert("register() succeeded: endpoint=" + e.target.result.pushEndpoint);
+    alert("register() succeeded: endpoint=" + e.target.result);
   }
 
   req.onerror = function(e) {
