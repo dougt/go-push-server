@@ -26,12 +26,11 @@
 
 <script>
 
-
-function requestPush() {
+function registerPush() {
   var req = navigator.push.register();
 
   req.onsuccess = function(e) {
-    alert("register() succeeded: endpoint=" + e.target.result.pushEndpoint);
+    alert("register() succeeded: endpoint=" + e.target.result);
   }
 
   req.onerror = function(e) {
@@ -101,7 +100,7 @@ function sendNotification(id, currentVersion) {
 </div>
 
 <h1>UA</h1>
-<button type="button" id="button" onClick="requestPush();">Request push</button>
+<button type="button" id="button" onClick="registerPush();">Register for push</button>
 
 <h1>Memory</h1>
 <p> Memory used: {{.TotalMemory}} </p>
