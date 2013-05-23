@@ -530,7 +530,11 @@ func admin(w http.ResponseWriter, r *http.Request) {
 	arguments := Arguments{makeNotifyURL(""), totalMemory, nil}
 
 	for uaid, channelIDSet := range gServerState.UAIDToChannelIDs {
-		connected := gServerState.ConnectedClients[uaid].Websocket != nil
+		connectedClient := gServerState.ConnectedClients[uaid]
+		if connectedClient == nil {
+			continue
+		}
+		connected := connectedClient.Websocket != nil
 		var channels []*Channel
 		for _, channel := range channelIDSet {
 			channels = append(channels, channel)
