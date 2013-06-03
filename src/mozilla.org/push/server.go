@@ -179,6 +179,7 @@ func handleRegister(client *Client, f map[string]interface{}) {
 		return
 	}
 
+	log.Println("Registered", register.PushEndpoint)
 	if err = websocket.Message.Send(client.Websocket, string(j)); err != nil {
 		// we could not send the message to a peer
 		log.Println("Could not send message to ", client.Websocket, err.Error())
@@ -331,7 +332,14 @@ func pushHandler(ws *websocket.Conn) {
 		client.LastContact = time.Now()
 		log.Println("pushHandler msg: ", f["messageType"])
 
-		switch f["messageType"] {
+		messageType, found := f["messageType"]
+		if !found {
+			// treat it as a ping
+			websocket.Message.Send(client.Websocket, "{}")
+			continue
+		}
+
+		switch messageType {
 		case "hello":
 			handleHello(client, f)
 			break
@@ -500,7 +508,6 @@ func deliverNotifications(notifyChan chan Notification, ackChan chan Ack) {
 		case <-time.After(10 * time.Millisecond):
 			if time.Since(lastAttempt).Seconds() > 15 {
 				lastAttempt = time.Now()
-				log.Println("Attempting to deliver ", len(pending), " pending notifications")
 				for _, notification := range pending {
 					attemptDelivery(notification)
 				}
