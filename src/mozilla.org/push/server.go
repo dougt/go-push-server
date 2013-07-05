@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+    "flag"
 	"fmt"
 	"go.net/websocket"
 	"io/ioutil"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+    "regexp"
 	"runtime"
 	"strings"
 	"text/template"
@@ -70,8 +72,15 @@ type Ack struct {
 	Version   uint64
 }
 
+type Flags struct {
+    verbose bool
+}
+
+var flags Flags
+
 var notifyChan chan Notification
 var ackChan chan Ack
+
 
 func readConfig() {
 
@@ -135,25 +144,63 @@ func makeNotifyURL(suffix string) string {
 	return scheme + gServerConfig.Hostname + ":" + gServerConfig.Port + gServerConfig.NotifyPrefix + suffix
 }
 
+func verbose(message ...string) {
+    if flags.verbose == false {
+        return
+    }
+    log.Printf("# ^^^^")
+    for _, msg := range message {
+        log.Printf("# %s ", msg)
+    }
+    log.Printf("#####")
+}
+
+var filter = regexp.MustCompile("[^\\w-]")
+
 func handleRegister(client *Client, f map[string]interface{}) {
 	type RegisterResponse struct {
 		Name         string `json:"messageType"`
 		Status       int    `json:"status"`
 		PushEndpoint string `json:"pushEndpoint"`
 		ChannelID    string `json:"channelID"`
+        Error        string `json:"error"`
 	}
+
+    if client.UAID == "" {
+        verbose("First command should be \"hello\".")
+        handleError(client, f, 401, "Invalid Command")
+    }
 
 	if f["channelID"] == nil {
 		log.Println("channelID is missing!")
+        handleError(client, f, 401, "Invalid Command")
+        verbose ("ChannelIDs must be included in the register message")
 		return
 	}
 
 	var channelID = f["channelID"].(string)
 
-	register := RegisterResponse{"register", 0, "", channelID}
+    if filter.Find([]byte(channelID)) != nil {
+        handleError(client, f, 401, "Invalid Command")
+        verbose("Only use characters from \"A-Za-z0-9._-\" for ChannelIDs")
+        return
+    }
+
+	register := RegisterResponse{"register", 0, "", channelID, ""}
+
+    if len(channelID) > 100 {
+        log.Println("ChannelID is too long.")
+        verbose(
+                "ChannelIDs should be less than 100 characters long.",
+                "Try using a UUID4 value.")
+        register.Error = "Invalid Command"
+        register.Status = 401
+    } else {
 
 	prevEntry, exists := gServerState.ChannelIDToChannel[channelID]
 	if exists && prevEntry.UAID != client.UAID {
+        log.Println("!! ChannelID already registered ", channelID)
+        register.Error = "Conflict"
 		register.Status = 409
 	} else {
 
@@ -168,6 +215,7 @@ func handleRegister(client *Client, f map[string]interface{}) {
 		register.Status = 200
 		register.PushEndpoint = makeNotifyURL(channelID)
 	}
+}
 
 	if register.Status == 0 {
 		panic("Register(): status field was left unset when replying to client")
@@ -188,8 +236,14 @@ func handleRegister(client *Client, f map[string]interface{}) {
 
 func handleUnregister(client *Client, f map[string]interface{}) {
 
+    if client.UAID == "" {
+        verbose("First command should be \"hello\".")
+        handleError(client, f, 401, "Invalid Command")
+        return
+    }
 	if f["channelID"] == nil {
 		log.Println("channelID is missing!")
+        handleError(client, f, 401, "Invalid Command")
 		return
 	}
 
@@ -217,6 +271,8 @@ func handleUnregister(client *Client, f map[string]interface{}) {
 	j, err := json.Marshal(unregister)
 	if err != nil {
 		log.Println("Could not convert unregister response to json %s", err)
+        verbose("Please make sure that data sent to the websocket is in",
+                "proper JSON format.")
 		return
 	}
 
@@ -230,7 +286,15 @@ func handleHello(client *Client, f map[string]interface{}) {
 
 	status := 200
 
-	if f["uaid"] == nil {
+    if client.UAID != "" {
+        handleError(client, f, 401, "Invalid Command")
+        verbose("Only send 'hello' at start of connection.")
+        return
+    }
+
+    log.Printf("=== uaid: ", f["uaid"])
+
+	if f["uaid"] == nil || f["uaid"] == "" {
 		uaid, err := uuid.GenUUID()
 		if err != nil {
 			status = 400
@@ -239,6 +303,28 @@ func handleHello(client *Client, f map[string]interface{}) {
 		client.UAID = uaid
 	} else {
 		client.UAID = f["uaid"].(string)
+
+        if filter.Find([]byte(f["uaid"].(string))) != nil {
+            handleError(client, f, 401, "Invalid Command")
+            verbose("Only use characters from \"A-Za-z0-9._-\" for UAIDs")
+            return
+        }
+
+        if len(client.UAID) > 100 {
+            handleError(client, f, 401, "Invalid Command")
+            verbose(
+                "UAIDs should be less than 100 characters long.",
+                "Try using a UUID4 value.")
+            return
+        }
+
+        if _, ok := f["channelIDs"]; !ok {
+            handleError(client, f, 401, "Invalid Command")
+            verbose(
+                "ChannelIDs must be specified, even if there is no content.",
+                "e.g. channelIDs:[]")
+            return
+        }
 
 		resetClient := false
 
@@ -307,6 +393,10 @@ func handleHello(client *Client, f map[string]interface{}) {
 }
 
 func handleAck(client *Client, f map[string]interface{}) {
+    if client.UAID == "" {
+        verbose("First command should be \"hello\".")
+        handleError(client, f, 401, "Invalid Command")
+    }
 	for _, update := range f["updates"].([]interface{}) {
 		typeConverted := update.(map[string]interface{})
 		version := uint64(typeConverted["version"].(float64))
@@ -314,6 +404,14 @@ func handleAck(client *Client, f map[string]interface{}) {
 		log.Println(ack)
 		ackChan <- ack
 	}
+}
+
+func handleError(client *Client, f map[string]interface{},
+    errCode int, msg string) {
+    f["status"] = errCode
+    f["error"] = msg
+    log.Printf("Returning error %d : %s", errCode, msg)
+    websocket.JSON.Send(client.Websocket, f)
 }
 
 func pushHandler(ws *websocket.Conn) {
@@ -339,7 +437,7 @@ func pushHandler(ws *websocket.Conn) {
 			continue
 		}
 
-		switch messageType {
+		switch strings.ToLower(messageType.(string)) {
 		case "hello":
 			handleHello(client, f)
 			break
@@ -356,8 +454,15 @@ func pushHandler(ws *websocket.Conn) {
 			handleAck(client, f)
 			break
 
+        case "ping":
+			websocket.Message.Send(client.Websocket, "{}")
+			continue
+
 		default:
 			log.Println(" -> Unknown", f)
+            verbose ("Please only use 'hello', 'register', 'unregister'",
+                     "or 'ack' as messageType values.")
+            handleError(client, f, 401, "Invalid Command")
 			break
 		}
 
@@ -379,6 +484,8 @@ func notifyHandler(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != "PUT" {
 		log.Println("NOT A PUT")
+        verbose("Be sure to send data with method 'PUT'.",
+            "For example, with curl: curl -X PUT http://host/...?version=123")
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("Method must be PUT."))
 		return
@@ -556,6 +663,13 @@ func admin(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+
+    flag.BoolVar(&flags.verbose, "verbose", true,
+        "Enable verbose debugging output")
+    flag.Parse()
+    if flags.verbose {
+        verbose("Verbose mode activated")
+    }
 
 	readConfig()
 
