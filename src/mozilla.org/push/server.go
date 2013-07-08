@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/json"
-    "flag"
+	"flag"
 	"fmt"
 	"go.net/websocket"
 	"io/ioutil"
@@ -10,8 +10,9 @@ import (
 	"net"
 	"net/http"
 	"os"
-    "regexp"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -73,7 +74,7 @@ type Ack struct {
 }
 
 type Flags struct {
-    verbose bool
+	verbose bool
 }
 
 var flags Flags
@@ -81,6 +82,7 @@ var flags Flags
 var notifyChan chan Notification
 var ackChan chan Ack
 
+var filter = regexp.MustCompile("[^\\w\\.-]")
 
 func readConfig() {
 
@@ -145,17 +147,15 @@ func makeNotifyURL(suffix string) string {
 }
 
 func verbose(message ...string) {
-    if flags.verbose == false {
-        return
-    }
-    log.Printf("# ^^^^")
-    for _, msg := range message {
-        log.Printf("# %s ", msg)
-    }
-    log.Printf("#####")
+	if flags.verbose == false {
+		return
+	}
+	log.Printf("# ^^^^")
+	for _, msg := range message {
+		log.Printf("# %s ", msg)
+	}
+	log.Printf("#####")
 }
-
-var filter = regexp.MustCompile("[^\\w-]")
 
 func handleRegister(client *Client, f map[string]interface{}) {
 	type RegisterResponse struct {
@@ -163,59 +163,69 @@ func handleRegister(client *Client, f map[string]interface{}) {
 		Status       int    `json:"status"`
 		PushEndpoint string `json:"pushEndpoint"`
 		ChannelID    string `json:"channelID"`
-        Error        string `json:"error"`
+		Error        string `json:"error"`
 	}
 
-    if client.UAID == "" {
-        verbose("First command should be \"hello\".")
-        handleError(client, f, 401, "Invalid Command")
-    }
+	if client.UAID == "" {
+		verbose("First command should be \"hello\".")
+		handleError(client, f, 401, "Invalid Command")
+	}
 
-	if f["channelID"] == nil {
+	if chid, ok := f["channelID"]; ok {
+		if chid == "" {
+			log.Println("channelID is blank!")
+			handleError(client, f, 401, "Invalid Command")
+			verbose("ChannelID must not be blank in the register message")
+			return
+		}
+	} else {
 		log.Println("channelID is missing!")
-        handleError(client, f, 401, "Invalid Command")
-        verbose ("ChannelIDs must be included in the register message")
+		handleError(client, f, 401, "Invalid Command")
+		verbose("ChannelID must be included in the register message")
 		return
 	}
 
 	var channelID = f["channelID"].(string)
 
-    if filter.Find([]byte(channelID)) != nil {
-        handleError(client, f, 401, "Invalid Command")
-        verbose("Only use characters from \"A-Za-z0-9._-\" for ChannelIDs")
-        return
-    }
+	if filter.Find([]byte(channelID)) != nil {
+		handleError(client, f, 401, "Invalid Command")
+		verbose("Only use characters from \"A-Za-z0-9._-\" for ChannelIDs")
+		return
+	}
 
 	register := RegisterResponse{"register", 0, "", channelID, ""}
 
-    if len(channelID) > 100 {
-        log.Println("ChannelID is too long.")
-        verbose(
-                "ChannelIDs should be less than 100 characters long.",
-                "Try using a UUID4 value.")
-        register.Error = "Invalid Command"
-        register.Status = 401
-    } else {
-
-	prevEntry, exists := gServerState.ChannelIDToChannel[channelID]
-	if exists && prevEntry.UAID != client.UAID {
-        log.Println("!! ChannelID already registered ", channelID)
-        register.Error = "Conflict"
-		register.Status = 409
+	if len(channelID) > 100 {
+		log.Println("ChannelID is too long.")
+		verbose(
+			"ChannelIDs should be less than 100 characters long.",
+			"Try using a UUID4 value.")
+		register.Error = "Invalid Command"
+		register.Status = 401
 	} else {
 
-		channel := &Channel{client.UAID, channelID, 0}
+		prevEntry, exists := gServerState.ChannelIDToChannel[channelID]
+		if exists && prevEntry.UAID != client.UAID {
+			log.Println("!! ChannelID already registered ", channelID)
+			verbose(fmt.Sprintf("Channel %s already belongs to %s (%s)", channelID, prevEntry.UAID, client.UAID))
+			verbose(fmt.Sprintf("%s", gServerState.ChannelIDToChannel))
+			register.Error = "Conflict"
+			register.Status = 409
+		} else {
+			log.Println("Generating new endpoint for channel")
 
-		if gServerState.UAIDToChannelIDs[client.UAID] == nil {
-			gServerState.UAIDToChannelIDs[client.UAID] = make(ChannelIDSet)
+			channel := &Channel{client.UAID, channelID, 0}
+
+			if gServerState.UAIDToChannelIDs[client.UAID] == nil {
+				gServerState.UAIDToChannelIDs[client.UAID] = make(ChannelIDSet)
+			}
+			gServerState.UAIDToChannelIDs[client.UAID][channelID] = channel
+			gServerState.ChannelIDToChannel[channelID] = channel
+
+			register.Status = 200
+			register.PushEndpoint = makeNotifyURL(channelID)
 		}
-		gServerState.UAIDToChannelIDs[client.UAID][channelID] = channel
-		gServerState.ChannelIDToChannel[channelID] = channel
-
-		register.Status = 200
-		register.PushEndpoint = makeNotifyURL(channelID)
 	}
-}
 
 	if register.Status == 0 {
 		panic("Register(): status field was left unset when replying to client")
@@ -227,7 +237,8 @@ func handleRegister(client *Client, f map[string]interface{}) {
 		return
 	}
 
-	log.Println("Registered", register.PushEndpoint)
+	verbose(fmt.Sprintf("Sending %s", string(j)))
+
 	if err = websocket.Message.Send(client.Websocket, string(j)); err != nil {
 		// we could not send the message to a peer
 		log.Println("Could not send message to ", client.Websocket, err.Error())
@@ -236,14 +247,14 @@ func handleRegister(client *Client, f map[string]interface{}) {
 
 func handleUnregister(client *Client, f map[string]interface{}) {
 
-    if client.UAID == "" {
-        verbose("First command should be \"hello\".")
-        handleError(client, f, 401, "Invalid Command")
-        return
-    }
-	if f["channelID"] == nil {
+	if client.UAID == "" {
+		verbose("First command should be \"hello\".")
+		handleError(client, f, 401, "Invalid Command")
+		return
+	}
+	if _, ok := f["channelID"]; !ok {
 		log.Println("channelID is missing!")
-        handleError(client, f, 401, "Invalid Command")
+		handleError(client, f, 401, "Invalid Command")
 		return
 	}
 
@@ -253,11 +264,18 @@ func handleUnregister(client *Client, f map[string]interface{}) {
 		// only delete if UA owns this channel
 		_, owns := gServerState.UAIDToChannelIDs[client.UAID][channelID]
 		if owns {
-			// remove ownership
-			delete(gServerState.UAIDToChannelIDs[client.UAID], channelID)
+			verbose(fmt.Sprintf("Removing channel %s for %s",
+				channelID, client.UAID))
 			// delete the channel itself
 			delete(gServerState.ChannelIDToChannel, channelID)
+			// remove ownership
+			delete(gServerState.UAIDToChannelIDs[client.UAID], channelID)
+		} else {
+			verbose(fmt.Sprintf("#### Uh-oh, channel %s already exists, but does"+
+				" not belong to %s", channelID, client.UAID))
 		}
+	} else {
+		verbose("There's no mapping for channelID of ", channelID)
 	}
 
 	type UnregisterResponse struct {
@@ -271,8 +289,8 @@ func handleUnregister(client *Client, f map[string]interface{}) {
 	j, err := json.Marshal(unregister)
 	if err != nil {
 		log.Println("Could not convert unregister response to json %s", err)
-        verbose("Please make sure that data sent to the websocket is in",
-                "proper JSON format.")
+		verbose("Please make sure that data sent to the websocket is in",
+			"proper JSON format.")
 		return
 	}
 
@@ -282,84 +300,123 @@ func handleUnregister(client *Client, f map[string]interface{}) {
 	}
 }
 
+func handlePurge(client *Client, f map[string]interface{}) {
+	if client.UAID == "" {
+		handleError(client, f, 401, "Invalid Command")
+		return
+	}
+	log.Printf("--- Deleting %d records", len(gServerState.UAIDToChannelIDs[client.UAID]))
+	for _, channel := range gServerState.UAIDToChannelIDs[client.UAID] {
+		delete(gServerState.UAIDToChannelIDs[client.UAID], channel.ChannelID)
+		delete(gServerState.ChannelIDToChannel, channel.ChannelID)
+	}
+	websocket.Message.Send(client.Websocket, "{}")
+	saveState()
+}
+
 func handleHello(client *Client, f map[string]interface{}) {
 
 	status := 200
+	var candidateUAID string
+	var err error
 
-    if client.UAID != "" {
-        handleError(client, f, 401, "Invalid Command")
-        verbose("Only send 'hello' at start of connection.")
-        return
-    }
+	if _, ok := f["uaid"]; !ok {
+		f["uaid"] = ""
+	}
+	candidateUAID = f["uaid"].(string)
+	if filter.Find([]byte(candidateUAID)) != nil {
+		handleError(client, f, 503, "Service Unavailable")
+		verbose("Only use characters from \"A-Za-z0-9._-\" for UAIDs")
+		return
+	}
+	if len(candidateUAID) > 0 && len(client.UAID) > 0 &&
+		(candidateUAID != client.UAID) {
+		handleError(client, f, 503, "Service Unavaliable")
+		verbose("If you've already sent a \"hello\", the UAID must either be",
+			"blank, or the same value passed previously.")
+		return
+	}
 
-    log.Printf("=== uaid: ", f["uaid"])
+	if f["channelIDs"] == nil {
+		handleError(client, f, 401, "Invalid Command")
+		verbose("ChannelIDs must be specified, even if there is no content.",
+			"e.g. channelIDs:[]")
+		return
+	}
 
-	if f["uaid"] == nil || f["uaid"] == "" {
+	if len(candidateUAID) == 0 && len(client.UAID) > 0 {
+		candidateUAID = client.UAID
+	}
+
+	log.Printf("=== uaid: ", f["uaid"])
+
+	if candidateUAID == "" {
+		verbose("No \"uaid\" found. Creating one...")
+		candidateUAID, err = uuid.GenUUID()
+		if err != nil {
+			status = 400
+			handleError(client, f, 500, "UUID Generation error")
+			log.Println("GenUUID error %s", err)
+		}
+	} else {
+		if filter.Find([]byte(candidateUAID)) != nil {
+			handleError(client, f, 401, "Invalid Command")
+			verbose("Only use characters from \"A-Za-z0-9._-\" for UAIDs")
+			return
+		}
+
+		if len(candidateUAID) > 100 {
+			handleError(client, f, 401, "Invalid Command")
+			verbose(
+				"UAIDs should be less than 100 characters long.",
+				"Try using a UUID4 value.")
+			return
+		}
+	}
+	prevUAID := client.UAID
+	client.UAID = candidateUAID
+
+	resetClient := false
+	for _, chid := range f["channelIDs"].([]interface{}) {
+		channelID := chid.(string)
+		if filter.Find([]byte(channelID)) != nil {
+			verbose(fmt.Sprintf("Skipping invalid channel %s", chid))
+			continue
+		}
+
+		if gServerState.UAIDToChannelIDs[client.UAID] == nil {
+			//gServerState.UAIDToChannelIDs[client.UAID] = make(ChannelIDSet)
+			// since we don't have any channelIDs, don't bother looping
+			//any more
+			verbose("No channels found for UAID, resetting...")
+			resetClient = true
+			break
+		}
+
+		if _, ok := gServerState.UAIDToChannelIDs[client.UAID][channelID]; !ok {
+			verbose("Channel not found for UAID, resetting...")
+			resetClient = true
+			break
+		}
+	}
+
+	if resetClient {
+		// delete the older connection
+		for _, channel := range gServerState.UAIDToChannelIDs[prevUAID] {
+			delete(gServerState.UAIDToChannelIDs[prevUAID], channel.ChannelID)
+			delete(gServerState.ChannelIDToChannel, channel.ChannelID)
+		}
+		delete(gServerState.ConnectedClients, client.UAID)
+		delete(gServerState.UAIDToChannelIDs, client.UAID)
+		// TODO(nsm) clear up ChannelIDToChannels which now has extra
+		// channelIDs not associated with any client
+
 		uaid, err := uuid.GenUUID()
 		if err != nil {
 			status = 400
 			log.Println("GenUUID error %s", err)
 		}
 		client.UAID = uaid
-	} else {
-		client.UAID = f["uaid"].(string)
-
-        if filter.Find([]byte(f["uaid"].(string))) != nil {
-            handleError(client, f, 401, "Invalid Command")
-            verbose("Only use characters from \"A-Za-z0-9._-\" for UAIDs")
-            return
-        }
-
-        if len(client.UAID) > 100 {
-            handleError(client, f, 401, "Invalid Command")
-            verbose(
-                "UAIDs should be less than 100 characters long.",
-                "Try using a UUID4 value.")
-            return
-        }
-
-        if _, ok := f["channelIDs"]; !ok {
-            handleError(client, f, 401, "Invalid Command")
-            verbose(
-                "ChannelIDs must be specified, even if there is no content.",
-                "e.g. channelIDs:[]")
-            return
-        }
-
-		resetClient := false
-
-		if f["channelIDs"] != nil {
-			for _, foo := range f["channelIDs"].([]interface{}) {
-				channelID := foo.(string)
-
-				if gServerState.UAIDToChannelIDs[client.UAID] == nil {
-					gServerState.UAIDToChannelIDs[client.UAID] = make(ChannelIDSet)
-					// since we don't have any channelIDs, don't bother looping any more
-					resetClient = true
-					break
-				}
-
-				if _, ok := gServerState.UAIDToChannelIDs[client.UAID][channelID]; !ok {
-					resetClient = true
-					break
-				}
-			}
-		}
-
-		if resetClient {
-			// delete the older connection
-			delete(gServerState.ConnectedClients, client.UAID)
-			delete(gServerState.UAIDToChannelIDs, client.UAID)
-			// TODO(nsm) clear up ChannelIDToChannels which now has extra
-			// channelIDs not associated with any client
-
-			uaid, err := uuid.GenUUID()
-			if err != nil {
-				status = 400
-				log.Println("GenUUID error %s", err)
-			}
-			client.UAID = uaid
-		}
 	}
 
 	gServerState.ConnectedClients[client.UAID] = client
@@ -393,25 +450,30 @@ func handleHello(client *Client, f map[string]interface{}) {
 }
 
 func handleAck(client *Client, f map[string]interface{}) {
-    if client.UAID == "" {
-        verbose("First command should be \"hello\".")
-        handleError(client, f, 401, "Invalid Command")
-    }
+	if client.UAID == "" {
+		verbose("First command should be \"hello\".")
+		handleError(client, f, 401, "Invalid Command")
+		return
+	}
+	if _, ok := f["updates"]; !ok {
+		verbose("No \"updates\" found for ACK.")
+		handleError(client, f, 401, "Invalid Command")
+		return
+	}
 	for _, update := range f["updates"].([]interface{}) {
 		typeConverted := update.(map[string]interface{})
 		version := uint64(typeConverted["version"].(float64))
 		ack := Ack{typeConverted["channelID"].(string), version}
-		log.Println(ack)
 		ackChan <- ack
 	}
 }
 
 func handleError(client *Client, f map[string]interface{},
-    errCode int, msg string) {
-    f["status"] = errCode
-    f["error"] = msg
-    log.Printf("Returning error %d : %s", errCode, msg)
-    websocket.JSON.Send(client.Websocket, f)
+	errCode int, msg string) {
+	f["status"] = errCode
+	f["error"] = msg
+	log.Printf("Returning error %d : %s", errCode, msg)
+	websocket.JSON.Send(client.Websocket, f)
 }
 
 func pushHandler(ws *websocket.Conn) {
@@ -428,45 +490,60 @@ func pushHandler(ws *websocket.Conn) {
 		}
 
 		client.LastContact = time.Now()
-		log.Println("pushHandler msg: ", f["messageType"])
+		log.Println("pushHandler msg: ", f["messageType"], len(f), f)
+
+		if len(f) == 0 {
+			websocket.Message.Send(client.Websocket, "{}")
+			continue
+		}
 
 		messageType, found := f["messageType"]
 		if !found {
 			// treat it as a ping
-			websocket.Message.Send(client.Websocket, "{}")
-			continue
+			f["messageType"] = ""
+			messageType = ""
 		}
+		switch messageType.(type) {
+		case string:
+			switch strings.ToLower(messageType.(string)) {
+			case "hello":
+				handleHello(client, f)
+				break
 
-		switch strings.ToLower(messageType.(string)) {
-		case "hello":
-			handleHello(client, f)
-			break
+			case "register":
+				handleRegister(client, f)
+				break
 
-		case "register":
-			handleRegister(client, f)
-			break
+			case "unregister":
+				handleUnregister(client, f)
+				break
 
-		case "unregister":
-			handleUnregister(client, f)
-			break
+			case "ack":
+				handleAck(client, f)
+				break
 
-		case "ack":
-			handleAck(client, f)
-			break
+			case "ping":
+				websocket.Message.Send(client.Websocket, "{}")
+				continue
 
-        case "ping":
-			websocket.Message.Send(client.Websocket, "{}")
-			continue
+			case "purge":
+				verbose("Purging data for ", client.UAID)
+				handlePurge(client, f)
+				break
 
+			default:
+				log.Println(" -> Unknown", f)
+				verbose("Please only use 'hello', 'register', 'unregister'",
+					"or 'ack' as messageType values.")
+				handleError(client, f, 401, "Invalid Command")
+				break
+			}
+			saveState()
 		default:
-			log.Println(" -> Unknown", f)
-            verbose ("Please only use 'hello', 'register', 'unregister'",
-                     "or 'ack' as messageType values.")
-            handleError(client, f, 401, "Invalid Command")
+			handleError(client, f, 401, "Invalid Command")
+			verbose("Please use only strings as messageTypes")
 			break
 		}
-
-		saveState()
 	}
 
 	log.Println("Closing Websocket!")
@@ -484,8 +561,8 @@ func notifyHandler(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != "PUT" {
 		log.Println("NOT A PUT")
-        verbose("Be sure to send data with method 'PUT'.",
-            "For example, with curl: curl -X PUT http://host/...?version=123")
+		verbose("Be sure to send data with method 'PUT'.",
+			"For example, with curl: curl -X PUT http://host/...?version=123")
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("Method must be PUT."))
 		return
@@ -505,7 +582,23 @@ func notifyHandler(w http.ResponseWriter, r *http.Request) {
 		log.Println("Could not find channel " + channelID)
 		return
 	}
-	channel.Version++
+	// use the sent version number
+	var vers int64
+	var err error
+	svers := r.FormValue("version")
+	if svers != "" {
+		vers, err = strconv.ParseInt(svers, 10, 64)
+		if err != nil || vers < 0 {
+			http.Error(w, "\"Invalid Version\"", http.StatusBadRequest)
+			verbose("Use only 64 bit positive numbers for version")
+			return
+		}
+	}
+	if vers == 0 {
+		vers = time.Now().UTC().Unix()
+	}
+
+	channel.Version = uint64(vers)
 
 	saveState()
 
@@ -664,12 +757,12 @@ func admin(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 
-    flag.BoolVar(&flags.verbose, "verbose", true,
-        "Enable verbose debugging output")
-    flag.Parse()
-    if flags.verbose {
-        verbose("Verbose mode activated")
-    }
+	flag.BoolVar(&flags.verbose, "verbose", true,
+		"Enable verbose debugging output")
+	flag.Parse()
+	if flags.verbose {
+		verbose("Verbose mode activated")
+	}
 
 	readConfig()
 
