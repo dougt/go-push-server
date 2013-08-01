@@ -17,6 +17,19 @@ To run:
   ./push
 ```
 
+To test:
+```
+  git submodule update
+  cd simplepush_test
+  make
+  bin/python bin/activate_this.py
+  bin/python smoke_test.py
+  bin/python run_all.py
+```
+The tests assume that the push server is running as the
+default port number and not running TLS
+
+
 To test WebSockets with TLS, you will need a certificate. Here are simple
 instructions to create your own self-signed certificate for testing:
 
