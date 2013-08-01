@@ -1,0 +1,23 @@
+language: go
+go: 1.1
+
+before_install:
+    - sudo apt-get update -qq
+    - sudo apt-get install golang python-virtualenv
+
+    # Get the tests
+    - git submodule update --init --recursive
+
+install:
+    - GOPATH=$PWD go build mozilla.org/push
+    - cp config-example.json config.json
+    - make -C simplepush_test
+    
+script:
+    - ./push &
+    - cd simplepush_test
+    - bin/python bin/activate_this.py
+    - bin/python smoke_test.py
+
+after_script:
+    - killall -9 push
