@@ -1,4 +1,6 @@
 go-push-server
+[![Build Status](https://travis-ci.org/dougt/go-push-server.png)](https://travis-ci.org/dougt/go-push-server.png)
+
 ==============
 
 Simple Push Server in Go
