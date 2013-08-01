@@ -1,7 +1,7 @@
 {
   "hostname"         : "localhost",
   "port"             : "8080",
-  "notifyPrefix"     : "/notify/",
+  "notifyPrefix"     : "/update/",
   "useTLS"           : false,
   "certFilename"     : "",
   "keyFilename"      : ""
