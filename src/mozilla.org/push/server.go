@@ -30,11 +30,26 @@ type ServerConfig struct {
 
 var gServerConfig ServerConfig
 
+type MobileNetworks struct {
+	MobileNetwork []MobileNetwork `json:"network"`
+}
+
+type MobileNetwork struct {
+	MobileNetwork string `json:"name"`
+	Mcc           int    `json:"mcc"`
+	Mnc           int    `json:"mnc"`
+	UpdateUrl     string `json:"updateURL"`
+}
+
+var gMobileNetworks MobileNetworks
+
 type Client struct {
 	Websocket   *websocket.Conn `json:"-"`
 	UAID        string          `json:"uaid"`
 	Ip          string          `json:"ip"`
 	Port        float64         `json:"port"`
+	Mcc         int             `json:"mcc"`
+	Mnc         int             `json:"mnc"`
 	LastContact time.Time       `json:"-"`
 }
 
@@ -83,6 +98,25 @@ var notifyChan chan Notification
 var ackChan chan Ack
 
 var filter = regexp.MustCompile("[^\\w\\.-]")
+
+func readMobileNetworks() {
+
+	var data []byte
+	var err error
+
+	data, err = ioutil.ReadFile("mobile_networks.json")
+	if err != nil {
+		log.Println("Not configured.  Could not find mobile_networks.json")
+		os.Exit(-1)
+	}
+
+	err = json.Unmarshal(data, &gMobileNetworks)
+	if err != nil {
+		log.Println("Could not unmarshal mobile_networks.json", err)
+		os.Exit(-1)
+		return
+	}
+}
 
 func readConfig() {
 
@@ -430,6 +464,15 @@ func handleHello(client *Client, f map[string]interface{}) {
 		log.Println("No hostport ", f)
 	}
 
+	if f["mobilenetwork"] != nil {
+		m := f["mobilenetwork"].(map[string]interface{})
+		client.Mcc = m["mcc"].(int)
+		client.Mnc = m["mnc"].(int)
+		log.Println("Got hostport pair ", client.Ip, client.Port)
+	} else {
+		log.Println("No hostport ", f)
+	}
+
 	type HelloResponse struct {
 		Name   string `json:"messageType"`
 		Status int    `json:"status"`
@@ -478,7 +521,7 @@ func handleError(client *Client, f map[string]interface{},
 
 func pushHandler(ws *websocket.Conn) {
 
-	client := &Client{ws, "", "", 0, time.Now()}
+	client := &Client{ws, "", "", 0, 0, 0, time.Now()}
 
 	for {
 		var f map[string]interface{}
@@ -610,6 +653,9 @@ func notifyHandler(w http.ResponseWriter, r *http.Request) {
 
 func wakeupClient(client *Client) {
 	log.Println("wakeupClient: ", client)
+
+	// TODO Add a check here for gMobileNetworks
+
 	service := fmt.Sprintf("%s:%g", client.Ip, client.Port)
 
 	udpAddr, err := net.ResolveUDPAddr("udp4", service)
@@ -629,7 +675,6 @@ func wakeupClient(client *Client) {
 		log.Println("UDP Write error ", err.Error())
 		return
 	}
-
 }
 
 func sendNotificationToClient(client *Client, channel *Channel) {
@@ -765,6 +810,8 @@ func main() {
 	}
 
 	readConfig()
+
+	readMobileNetworks()
 
 	openState()
 
